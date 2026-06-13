@@ -1,0 +1,247 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum NodeType {
+  OLT
+  POLE
+  ODP
+  CLIENT
+  ROUTER
+}
+
+enum NodeStatus {
+  ONLINE
+  OFFLINE
+  WARNING
+  UNKNOWN
+}
+
+enum CableType {
+  BACKBONE
+  DISTRIBUTION
+  DROP_WIRE
+}
+
+enum CableStatus {
+  NORMAL
+  AFFECTED
+  BROKEN
+  UNKNOWN
+}
+
+enum MonitoringMethod {
+  MANUAL
+  PING
+  PPPOE
+  OLT
+  SNMP
+}
+
+enum InstallationStatus {
+  PROSPECT
+  REGISTERED
+  INSTALLED
+  ACTIVE
+  SUSPENDED
+  DISCONNECTED
+  CANCELLED
+}
+
+enum OnuStatus {
+  ONLINE
+  OFFLINE
+  LOS
+  DYING_GASP
+  UNKNOWN
+}
+
+enum UserRole {
+  ADMIN
+  TECHNICIAN
+  SALES
+}
+
+enum UserAccess {
+  EDIT
+  VIEW
+}
+
+enum MonitoringLogEventType {
+  NODE_ONLINE
+  NODE_OFFLINE
+  NODE_WARNING
+  NODE_UNKNOWN
+  CABLE_NORMAL
+  CABLE_AFFECTED
+  CABLE_BROKEN
+  CLIENT_CREATED
+  CLIENT_UPDATED
+  ODP_UPDATED
+  MANUAL_NOTE
+  SYSTEM
+}
+
+model Node {
+  id        String     @id
+  name      String
+  type      NodeType
+  ipAddress String?
+  latitude  Float
+  longitude Float
+  status    NodeStatus @default(UNKNOWN)
+  rxPower   Float?
+  parentId  String?
+
+  // =========================
+  // Monitoring dasar
+  // =========================
+  pppoeUsername     String?
+  monitoringEnabled Boolean          @default(false)
+  monitoringMethod  MonitoringMethod @default(MANUAL)
+  lastCheckedAt     DateTime?
+  lastSeenAt        DateTime?
+  offlineSince      DateTime?
+  latencyMs         Float?
+
+  // =========================
+  // Data client lapangan
+  // Dipakai terutama untuk node type CLIENT
+  // =========================
+  customerName       String?
+  customerPhone      String?
+  customerAddress    String?
+  installationStatus InstallationStatus?
+  installationDate   DateTime?
+  salesName          String?
+  technicianName     String?
+  notes              String?
+  photoUrl           String?
+
+  // =========================
+  // Data ODP
+  // Dipakai terutama untuk node type ODP
+  // =========================
+  odpSlotCapacity Int?
+  odpInputPort    String?
+  odpOutputPort   String?
+
+  // =========================
+  // Data OLT
+  // Dipakai terutama untuk node type OLT
+  // Password dibuat optional dulu.
+  // Nanti sebaiknya disimpan terenkripsi.
+  // =========================
+  oltHost              String?
+  oltPort              Int?
+  oltUsername          String?
+  oltPasswordEncrypted String?
+
+  // =========================
+  // Data ONU / ONT dari OLT
+  // Dipakai terutama untuk node type CLIENT
+  // =========================
+  ponPort         String?
+  onuId           Int?
+  onuInterface    String?
+  onuSerialNumber String?
+  onuStatus       OnuStatus?
+  onuRxPower      Float?
+  onuLastCheckedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  parent   Node?  @relation("NodeParent", fields: [parentId], references: [id])
+  children Node[] @relation("NodeParent")
+
+  fromCables Cable[] @relation("CableFromNode")
+  toCables   Cable[] @relation("CableToNode")
+
+  monitoringLogs MonitoringLog[]
+
+  @@index([type])
+  @@index([status])
+  @@index([parentId])
+  @@index([pppoeUsername])
+  @@index([monitoringEnabled])
+  @@index([monitoringMethod])
+  @@index([installationStatus])
+  @@index([onuInterface])
+  @@index([onuSerialNumber])
+}
+
+model Cable {
+  id         String      @id
+  name       String
+  type       CableType
+  fromNodeId String
+  toNodeId   String
+  status     CableStatus @default(NORMAL)
+  coordinates Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  fromNode Node @relation("CableFromNode", fields: [fromNodeId], references: [id])
+  toNode   Node @relation("CableToNode", fields: [toNodeId], references: [id])
+
+  @@index([type])
+  @@index([status])
+  @@index([fromNodeId])
+  @@index([toNodeId])
+}
+
+model MonitoringLog {
+  id        String                 @id @default(cuid())
+  nodeId    String?
+  eventType MonitoringLogEventType
+
+  oldStatus NodeStatus?
+  newStatus NodeStatus?
+
+  title   String?
+  message String
+  metadata Json?
+
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  node      Node? @relation(fields: [nodeId], references: [id])
+  createdBy User? @relation(fields: [createdByUserId], references: [id])
+
+  @@index([nodeId])
+  @@index([eventType])
+  @@index([createdAt])
+  @@index([createdByUserId])
+}
+
+model User {
+  id           String     @id @default(cuid())
+  name         String
+  username     String     @unique
+  passwordHash String
+  role         UserRole   @default(SALES)
+  access       UserAccess @default(VIEW)
+  isActive     Boolean    @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  monitoringLogs MonitoringLog[]
+
+  @@index([role])
+  @@index([access])
+  @@index([isActive])
+}

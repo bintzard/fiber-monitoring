@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: fiber_postgis
+    restart: always
+    environment:
+      POSTGRES_USER: fiber
+      POSTGRES_PASSWORD: fiberpass
+      POSTGRES_DB: fiber_monitoring
+    ports:
+      - "5432:5432"
+    volumes:
+      - fiber_postgis_data:/var/lib/postgresql/data
+
+volumes:
+  fiber_postgis_data:

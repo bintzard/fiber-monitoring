@@ -1,0 +1,129 @@
+export type NodeStatus = 'ONLINE' | 'OFFLINE' | 'WARNING' | 'UNKNOWN'
+export type CableStatus = 'NORMAL' | 'AFFECTED' | 'BROKEN' | 'UNKNOWN'
+
+export interface NetworkNode {
+  id: string
+  name: string
+  type: 'OLT' | 'POLE' | 'ODP' | 'CLIENT' | 'ROUTER'
+  ipAddress?: string
+  latitude: number
+  longitude: number
+  status: NodeStatus
+  rxPower?: number
+  parentId?: string
+}
+
+export interface Cable {
+  id: string
+  name: string
+  type: 'BACKBONE' | 'DISTRIBUTION' | 'DROP_WIRE'
+  fromNodeId: string
+  toNodeId: string
+  status: CableStatus
+  coordinates: [number, number][]
+}
+
+export const nodes: NetworkNode[] = [
+  {
+    id: 'olt-1',
+    name: 'OLT POP Utama',
+    type: 'OLT',
+    ipAddress: '10.10.10.1',
+    latitude: -7.1502,
+    longitude: 111.8811,
+    status: 'ONLINE',
+  },
+  {
+    id: 'pole-1',
+    name: 'Tiang 01',
+    type: 'POLE',
+    latitude: -7.151,
+    longitude: 111.882,
+    status: 'ONLINE',
+    parentId: 'olt-1',
+  },
+  {
+    id: 'odp-1',
+    name: 'ODP FAT-01',
+    type: 'ODP',
+    latitude: -7.1517,
+    longitude: 111.883,
+    status: 'WARNING',
+    parentId: 'pole-1',
+  },
+  {
+    id: 'client-1',
+    name: 'Client - Budi',
+    type: 'CLIENT',
+    ipAddress: '192.168.10.11',
+    latitude: -7.1521,
+    longitude: 111.8835,
+    status: 'ONLINE',
+    rxPower: -21.8,
+    parentId: 'odp-1',
+  },
+  {
+    id: 'client-2',
+    name: 'Client - Siti backend',
+    type: 'CLIENT',
+    ipAddress: '192.168.10.12',
+    latitude: -7.1525,
+    longitude: 111.8837,
+    status: 'OFFLINE',
+    rxPower: -35,
+    parentId: 'odp-1',
+  },
+]
+
+export const cables: Cable[] = [
+  {
+    id: 'cable-1',
+    name: 'Backbone OLT ke Tiang 01',
+    type: 'BACKBONE',
+    fromNodeId: 'olt-1',
+    toNodeId: 'pole-1',
+    status: 'NORMAL',
+    coordinates: [
+      [-7.1502, 111.8811],
+      [-7.1506, 111.8815],
+      [-7.151, 111.882],
+    ],
+  },
+  {
+    id: 'cable-2',
+    name: 'Distribution Tiang 01 ke ODP FAT-01',
+    type: 'DISTRIBUTION',
+    fromNodeId: 'pole-1',
+    toNodeId: 'odp-1',
+    status: 'AFFECTED',
+    coordinates: [
+      [-7.151, 111.882],
+      [-7.1514, 111.8825],
+      [-7.1517, 111.883],
+    ],
+  },
+  {
+    id: 'cable-3',
+    name: 'Drop Wire ODP ke Client Budi',
+    type: 'DROP_WIRE',
+    fromNodeId: 'odp-1',
+    toNodeId: 'client-1',
+    status: 'NORMAL',
+    coordinates: [
+      [-7.1517, 111.883],
+      [-7.1521, 111.8835],
+    ],
+  },
+  {
+    id: 'cable-4',
+    name: 'Drop Wire ODP ke Client Siti',
+    type: 'DROP_WIRE',
+    fromNodeId: 'odp-1',
+    toNodeId: 'client-2',
+    status: 'BROKEN',
+    coordinates: [
+      [-7.1517, 111.883],
+      [-7.1525, 111.8837],
+    ],
+  },
+]
