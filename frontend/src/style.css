@@ -3263,3 +3263,271 @@ button.map-action-btn.logout-red-btn:hover {
     font-size: 9px !important;
   }
 }
+
+
+/* =========================================================
+   FIX FINAL - Map picking, cable route editor, and form fields
+   Ditambahkan tanpa menghapus style/fitur lama.
+========================================================= */
+
+/* Saat Ambil Titik dari Peta aktif, modal/form disembunyikan sementara
+   agar klik pada map Leaflet bisa diterima. Setelah titik dipilih,
+   NetworkMap akan mematikan mode picking dan form muncul lagi. */
+.app-modal-backdrop.map-picking-hidden {
+  pointer-events: none !important;
+  background: transparent !important;
+}
+
+.app-modal-backdrop.map-picking-hidden .app-modal {
+  display: none !important;
+}
+
+/* Panel desktop untuk edit jalur kabel. Sebelumnya elemen muncul polos/putih
+   karena style utama belum ada di luar media query mobile. */
+.cable-route-editor-panel {
+  position: absolute;
+  top: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1600;
+  max-width: min(920px, calc(100vw - 32px));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.94);
+  color: #ffffff;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(12px);
+}
+
+.cable-route-editor-panel > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 230px;
+}
+
+.cable-route-editor-panel strong {
+  font-size: 14px;
+  font-weight: 900;
+  color: #ffffff;
+}
+
+.cable-route-editor-panel span {
+  font-size: 12px;
+  font-weight: 700;
+  color: #cbd5e1;
+}
+
+.cable-route-editor-panel small {
+  font-size: 11px;
+  color: #93c5fd;
+}
+
+.cable-route-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cable-route-editor-actions button {
+  min-height: 36px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #1e293b;
+  color: #ffffff;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.cable-route-editor-actions button:hover:not(:disabled) {
+  background: #334155;
+}
+
+.cable-route-editor-actions button.success {
+  background: #166534;
+  border-color: #22c55e;
+}
+
+.cable-route-editor-actions button.success:hover:not(:disabled) {
+  background: #15803d;
+}
+
+.cable-route-editor-actions button.danger {
+  background: #991b1b;
+  border-color: #ef4444;
+}
+
+.cable-route-editor-actions button.danger:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+.cable-route-editor-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Textarea Add Client agar visualnya sama dengan input lain. */
+.add-node-form textarea,
+.edit-node-form textarea {
+  width: 100%;
+  padding: 9px;
+  border-radius: 8px;
+  border: 1px solid #475569;
+  background: #020617;
+  color: white;
+  outline: none;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.add-node-form textarea:focus,
+.edit-node-form textarea:focus {
+  border-color: #38bdf8;
+}
+
+@media (max-width: 768px) {
+  .app-modal-backdrop.map-picking-hidden {
+    pointer-events: none !important;
+    background: transparent !important;
+  }
+
+  .app-modal-backdrop.map-picking-hidden .app-modal {
+    display: none !important;
+  }
+
+  .cable-route-editor-panel {
+    position: absolute !important;
+    top: auto !important;
+    bottom: 12px !important;
+    left: 12px !important;
+    right: 12px !important;
+    width: auto !important;
+    max-width: none !important;
+    transform: none !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    z-index: 1600 !important;
+  }
+
+  .cable-route-editor-panel > div:first-child {
+    min-width: 0 !important;
+  }
+
+  .cable-route-editor-actions {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+
+  .cable-route-editor-actions button {
+    min-height: 38px !important;
+  }
+}
+
+/* =========================================================
+   DRAGGABLE TEMP LOCATION MARKER
+   Tambahan untuk hapus titik, ambil ulang, dan geser marker.
+   Aman ditaruh paling bawah tanpa menghapus style lama.
+========================================================= */
+
+.temp-location-marker {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: #0ea5e9;
+  border: 3px solid #ffffff;
+  box-shadow:
+    0 0 0 5px rgba(14, 165, 233, 0.3),
+    0 0 22px rgba(14, 165, 233, 0.95);
+  animation: tempLocationPulse 1s ease-in-out infinite;
+}
+
+@keyframes tempLocationPulse {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+
+  50% {
+    transform: scale(1.25);
+    opacity: 0.8;
+  }
+
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.temp-location-popup {
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.temp-location-popup strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.temp-location-popup span {
+  color: #475569;
+  line-height: 1.35;
+}
+
+.location-action-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.location-action-row .pick-location {
+  width: 100%;
+  margin: 0;
+}
+
+.clear-location-button {
+  margin: 0 !important;
+  padding: 9px 12px !important;
+  border-radius: 8px !important;
+  border: 1px solid #ef4444 !important;
+  background: #7f1d1d !important;
+  color: #ffffff !important;
+  cursor: pointer;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.clear-location-button:hover {
+  background: #991b1b !important;
+}
+
+.leaflet-marker-draggable {
+  cursor: grab;
+}
+
+.leaflet-marker-draggable:active {
+  cursor: grabbing;
+}
+
+@media (max-width: 768px) {
+  .location-action-row {
+    grid-template-columns: 1fr;
+  }
+
+  .clear-location-button {
+    width: 100%;
+    min-height: 42px;
+  }
+}

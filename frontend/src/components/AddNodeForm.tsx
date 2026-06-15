@@ -22,6 +22,7 @@ interface AddNodeFormProps {
   onLatitudeChange: (value: string) => void
   onLongitudeChange: (value: string) => void
   onTogglePickingLocation: () => void
+  onClearLocation?: () => void
   onSuccess?: (node: NetworkNode) => void
 }
 
@@ -60,6 +61,7 @@ export default function AddNodeForm({
   onLatitudeChange,
   onLongitudeChange,
   onTogglePickingLocation,
+  onClearLocation,
   onSuccess,
 }: AddNodeFormProps) {
   const [id, setId] = useState('')
@@ -283,18 +285,36 @@ export default function AddNodeForm({
       <div className="form-section">
         <h4 className="form-section-title">Lokasi</h4>
 
-        <button
-          type="button"
-          className={
-            isPickingLocation ? 'pick-location active' : 'pick-location'
-          }
-          onClick={onTogglePickingLocation}
-        >
-          {isPickingLocation ? 'Mode Klik Peta Aktif' : 'Ambil Titik dari Peta'}
-        </button>
+        <div className="location-action-row">
+          <button
+            type="button"
+            className={
+              isPickingLocation ? 'pick-location active' : 'pick-location'
+            }
+            onClick={onTogglePickingLocation}
+          >
+            {isPickingLocation
+              ? 'Mode Klik Peta Aktif'
+              : latitude && longitude
+                ? 'Ambil Ulang / Geser Titik'
+                : 'Ambil Titik dari Peta'}
+          </button>
+
+          {(latitude || longitude) && onClearLocation && (
+            <button
+              type="button"
+              className="clear-location-button"
+              onClick={onClearLocation}
+            >
+              Hapus Titik
+            </button>
+          )}
+        </div>
 
         {isPickingLocation && (
-          <p className="pick-info">Klik lokasi client/ODP/tiang di peta.</p>
+          <p className="pick-info">
+            Klik lokasi baru di peta atau geser marker titik sementara.
+          </p>
         )}
 
         {coordinateMessage && <p className="pick-info">{coordinateMessage}</p>}

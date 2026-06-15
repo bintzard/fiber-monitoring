@@ -1274,9 +1274,73 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
     setSelectedCoordinate(coordinate)
     setFormLatitude(String(coordinate.latitude))
     setFormLongitude(String(coordinate.longitude))
-    setCoordinateMessage('Koordinat berhasil diambil dari peta.')
+    setCoordinateMessage('Koordinat berhasil diambil dari peta. Marker biru bisa digeser jika titik belum tepat.')
     setIsPickingLocation(false)
     setPickingLocationSource(null)
+  }
+
+  function handleSelectedLocationDragEnd(event: L.DragEndEvent) {
+    const marker = event.target
+    const position = marker.getLatLng()
+
+    const coordinate = {
+      latitude: Number(position.lat.toFixed(7)),
+      longitude: Number(position.lng.toFixed(7)),
+    }
+
+    setSelectedCoordinate(coordinate)
+    setFormLatitude(String(coordinate.latitude))
+    setFormLongitude(String(coordinate.longitude))
+    setCoordinateMessage('Titik berhasil digeser. Latitude dan longitude sudah diperbarui.')
+    setIsPickingLocation(false)
+    setPickingLocationSource(null)
+  }
+
+  function handleClearSelectedLocation() {
+    setSelectedCoordinate(null)
+    setFormLatitude('')
+    setFormLongitude('')
+    setCoordinateMessage('Titik lokasi sudah dihapus. Silakan ambil titik ulang dari peta.')
+    setIsPickingLocation(false)
+    setPickingLocationSource(null)
+  }
+
+  function handleFormLatitudeChange(value: string) {
+    setFormLatitude(value)
+
+    const latitudeValue = Number(value)
+    const longitudeValue = Number(formLongitude)
+
+    if (value.trim() === '' || formLongitude.trim() === '') {
+      setSelectedCoordinate(null)
+      return
+    }
+
+    if (Number.isFinite(latitudeValue) && Number.isFinite(longitudeValue)) {
+      setSelectedCoordinate({
+        latitude: latitudeValue,
+        longitude: longitudeValue,
+      })
+    }
+  }
+
+  function handleFormLongitudeChange(value: string) {
+    setFormLongitude(value)
+
+    const latitudeValue = Number(formLatitude)
+    const longitudeValue = Number(value)
+
+    if (formLatitude.trim() === '' || value.trim() === '') {
+      setSelectedCoordinate(null)
+      return
+    }
+
+    if (Number.isFinite(latitudeValue) && Number.isFinite(longitudeValue)) {
+      setSelectedCoordinate({
+        latitude: latitudeValue,
+        longitude: longitudeValue,
+      })
+    }
   }
 
   function handleTogglePickingLocation(source: Exclude<PickingLocationSource, null> = 'node') {
@@ -2314,9 +2378,10 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
               parentOptions={nodes.filter((node) =>
                 ['OLT', 'POLE', 'ODP'].includes(node.type),
               )}
-              onLatitudeChange={setFormLatitude}
-              onLongitudeChange={setFormLongitude}
+              onLatitudeChange={handleFormLatitudeChange}
+              onLongitudeChange={handleFormLongitudeChange}
               onTogglePickingLocation={() => handleTogglePickingLocation('node')}
+              onClearLocation={handleClearSelectedLocation}
               onSuccess={() => {
                 handleAddNodeSuccess()
                 setIsAddNodeModalOpen(false)
@@ -2361,9 +2426,10 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
               isPickingLocation={isPickingLocation}
               odpOptions={nodes.filter((node) => node.type === 'ODP')}
               currentUserName={currentUser.name}
-              onLatitudeChange={setFormLatitude}
-              onLongitudeChange={setFormLongitude}
+              onLatitudeChange={handleFormLatitudeChange}
+              onLongitudeChange={handleFormLongitudeChange}
               onTogglePickingLocation={() => handleTogglePickingLocation('client')}
+              onClearLocation={handleClearSelectedLocation}
               onSuccess={(newNode) => {
                 handleAddClientSuccess(newNode)
                 setIsAddClientModalOpen(false)
@@ -2630,7 +2696,7 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
 
         {isPickingLocation && (
           <div className="map-pick-banner">
-            Mode ambil titik aktif — klik lokasi di peta
+            Mode ambil titik aktif — klik lokasi baru atau geser marker biru
           </div>
         )}
 
@@ -3153,13 +3219,19 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
                 selectedCoordinate.longitude,
               ]}
               icon={createSelectedLocationIcon()}
+              draggable
+              eventHandlers={{
+                dragend: handleSelectedLocationDragEnd,
+              }}
             >
               <Popup>
-                Titik terpilih
+                Titik sementara
                 <br />
                 Lat: {selectedCoordinate.latitude}
                 <br />
                 Lng: {selectedCoordinate.longitude}
+                <br />
+                <small>Geser marker ini jika titik belum tepat.</small>
               </Popup>
             </Marker>
           )}
