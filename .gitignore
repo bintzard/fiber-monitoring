@@ -7,3 +7,12 @@ dist
 backup_*.sql
 .DS_Store
 .vscode
+
+# Network/private import data
+backend/imports/*.kml
+backend/imports/*.csv
+backend/imports/*.json
+
+# Generated files
+backend/dist
+frontend/dist
