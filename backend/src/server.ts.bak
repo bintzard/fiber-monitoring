@@ -15,9 +15,6 @@ import type {
   InstallationStatus,
   MonitoringLogEventType,
   MonitoringMethod,
-  NetworkDevice,
-  NetworkDeviceConnectionStatus,
-  NetworkDeviceType,
   Node,
   NodeStatus,
   OnuStatus,
@@ -53,15 +50,6 @@ const allowedMonitoringMethods: MonitoringMethod[] = [
   'PPPOE',
   'OLT',
   'SNMP',
-]
-
-const allowedNetworkDeviceTypes: NetworkDeviceType[] = ['MIKROTIK', 'OLT']
-
-const allowedNetworkDeviceConnectionStatuses: NetworkDeviceConnectionStatus[] = [
-  'UNKNOWN',
-  'CONNECTED',
-  'DISCONNECTED',
-  'ERROR',
 ]
 
 const allowedInstallationStatuses: InstallationStatus[] = [
@@ -791,245 +779,6 @@ app.get('/api/monitoring-logs', requireAuth, async (req, res) => {
 })
 
 
-
-app.get('/api/network-devices', requireAuth, async (req, res) => {
-  try {
-    const type = parseNetworkDeviceType(req.query.type)
-
-    const devices = await prisma.networkDevice.findMany({
-      where: type ? { type } : undefined,
-      orderBy: [
-        { type: 'asc' },
-        { name: 'asc' },
-      ],
-    })
-
-    res.json({
-      success: true,
-      devices: devices.map(sanitizeNetworkDevice),
-    })
-  } catch (error) {
-    console.error(error)
-
-    res.status(500).json({
-      success: false,
-      message: 'Gagal mengambil data perangkat monitoring.',
-    })
-  }
-})
-
-app.post('/api/network-devices', requireAdmin, async (req, res) => {
-  try {
-    const name = normalizeOptionalString(req.body.name)
-    const type = parseNetworkDeviceType(req.body.type)
-    const host = normalizeOptionalString(req.body.host)
-    const port = parseOptionalNumber(req.body.port)
-    const username = normalizeOptionalString(req.body.username)
-    const password = normalizeOptionalString(req.body.password)
-    const brand = normalizeOptionalString(req.body.brand)
-    const model = normalizeOptionalString(req.body.model)
-    const notes = normalizeOptionalString(req.body.notes)
-
-    if (!name || !type || !host) {
-      res.status(400).json({
-        success: false,
-        message: 'Nama perangkat, tipe, dan host/IP wajib diisi.',
-      })
-      return
-    }
-
-    const device = await prisma.networkDevice.create({
-      data: {
-        name,
-        type,
-        host,
-        port: port || getDefaultNetworkDevicePort(type),
-        username,
-        passwordEncrypted: encryptSecret(password),
-        brand,
-        model,
-        notes,
-        isActive: typeof req.body.isActive === 'boolean' ? req.body.isActive : true,
-        connectionStatus: 'UNKNOWN',
-      },
-    })
-
-    res.status(201).json({
-      success: true,
-      message: 'Perangkat monitoring berhasil ditambahkan.',
-      device: sanitizeNetworkDevice(device),
-    })
-  } catch (error) {
-    console.error(error)
-
-    res.status(500).json({
-      success: false,
-      message: 'Gagal menambahkan perangkat monitoring.',
-    })
-  }
-})
-
-app.patch('/api/network-devices/:id', requireAdmin, async (req, res) => {
-  try {
-    const id = String(req.params.id)
-
-    const existingDevice = await prisma.networkDevice.findUnique({
-      where: { id },
-    })
-
-    if (!existingDevice) {
-      res.status(404).json({
-        success: false,
-        message: 'Perangkat monitoring tidak ditemukan.',
-      })
-      return
-    }
-
-    const nextType =
-      req.body.type !== undefined
-        ? parseNetworkDeviceType(req.body.type) || existingDevice.type
-        : existingDevice.type
-
-    const nextPort =
-      req.body.port !== undefined
-        ? parseOptionalNumber(req.body.port) || getDefaultNetworkDevicePort(nextType)
-        : existingDevice.port
-
-    const nextPasswordEncrypted =
-      req.body.password !== undefined
-        ? encryptSecret(normalizeOptionalString(req.body.password))
-        : existingDevice.passwordEncrypted
-
-    const device = await prisma.networkDevice.update({
-      where: { id },
-      data: {
-        name: valueOrExistingString(req.body.name, existingDevice.name) || existingDevice.name,
-        type: nextType,
-        host: valueOrExistingString(req.body.host, existingDevice.host) || existingDevice.host,
-        port: nextPort,
-        username: valueOrExistingString(req.body.username, existingDevice.username),
-        passwordEncrypted: nextPasswordEncrypted,
-        brand: valueOrExistingString(req.body.brand, existingDevice.brand),
-        model: valueOrExistingString(req.body.model, existingDevice.model),
-        notes: valueOrExistingString(req.body.notes, existingDevice.notes),
-        isActive:
-          typeof req.body.isActive === 'boolean'
-            ? req.body.isActive
-            : existingDevice.isActive,
-      },
-    })
-
-    res.json({
-      success: true,
-      message: 'Perangkat monitoring berhasil diperbarui.',
-      device: sanitizeNetworkDevice(device),
-    })
-  } catch (error) {
-    console.error(error)
-
-    res.status(500).json({
-      success: false,
-      message: 'Gagal memperbarui perangkat monitoring.',
-    })
-  }
-})
-
-app.delete('/api/network-devices/:id', requireAdmin, async (req, res) => {
-  try {
-    const id = String(req.params.id)
-
-    const existingDevice = await prisma.networkDevice.findUnique({
-      where: { id },
-      include: {
-        mikrotikClients: { select: { id: true } },
-        oltClients: { select: { id: true } },
-      },
-    })
-
-    if (!existingDevice) {
-      res.status(404).json({
-        success: false,
-        message: 'Perangkat monitoring tidak ditemukan.',
-      })
-      return
-    }
-
-    const usedByClientCount = existingDevice.mikrotikClients.length + existingDevice.oltClients.length
-
-    if (usedByClientCount > 0) {
-      const device = await prisma.networkDevice.update({
-        where: { id },
-        data: { isActive: false },
-      })
-
-      res.json({
-        success: true,
-        message: 'Perangkat masih dipakai client, jadi hanya dinonaktifkan.',
-        device: sanitizeNetworkDevice(device),
-      })
-      return
-    }
-
-    await prisma.networkDevice.delete({
-      where: { id },
-    })
-
-    res.json({
-      success: true,
-      message: 'Perangkat monitoring berhasil dihapus.',
-      id,
-    })
-  } catch (error) {
-    console.error(error)
-
-    res.status(500).json({
-      success: false,
-      message: 'Gagal menghapus perangkat monitoring.',
-    })
-  }
-})
-
-app.post('/api/network-devices/:id/test', requireAdmin, async (req, res) => {
-  try {
-    const id = String(req.params.id)
-
-    const device = await prisma.networkDevice.findUnique({
-      where: { id },
-    })
-
-    if (!device) {
-      res.status(404).json({
-        success: false,
-        message: 'Perangkat monitoring tidak ditemukan.',
-      })
-      return
-    }
-
-    // Tahap awal: test koneksi ringan hanya memastikan host dan port tersimpan.
-    // Test koneksi real MikroTik/OLT bisa disambungkan ke library monitor masing-masing pada tahap berikutnya.
-    const updatedDevice = await prisma.networkDevice.update({
-      where: { id },
-      data: {
-        connectionStatus: 'UNKNOWN',
-        lastConnectionMessage: 'Data perangkat sudah tersimpan. Test koneksi real akan diaktifkan pada tahap monitoring.',
-      },
-    })
-
-    res.json({
-      success: true,
-      message: 'Data perangkat valid. Test koneksi real belum diaktifkan pada tahap ini.',
-      device: sanitizeNetworkDevice(updatedDevice),
-    })
-  } catch (error) {
-    console.error(error)
-
-    res.status(500).json({
-      success: false,
-      message: 'Gagal mengetes perangkat monitoring.',
-    })
-  }
-})
-
 app.get('/api/olt/test', requireAdmin, async (req, res) => {
   try {
     const result = await testOltConnection()
@@ -1259,8 +1008,6 @@ app.post('/api/nodes', requireEditAccess, async (req, res) => {
       pppoeUsername,
       monitoringEnabled,
       monitoringMethod,
-      mikrotikDeviceId,
-      oltDeviceId,
       customerName,
       customerPhone,
       customerAddress,
@@ -1338,12 +1085,6 @@ app.post('/api/nodes', requireEditAccess, async (req, res) => {
       }
     }
 
-    await validateNodeMonitoringDevices({
-      monitoringMethod: finalMonitoringMethod,
-      mikrotikDeviceId,
-      oltDeviceId,
-    })
-
     const newNode = await prisma.node.create({
       data: {
         id,
@@ -1363,8 +1104,6 @@ app.post('/api/nodes', requireEditAccess, async (req, res) => {
         monitoringEnabled:
           typeof monitoringEnabled === 'boolean' ? monitoringEnabled : false,
         monitoringMethod: finalMonitoringMethod,
-        mikrotikDeviceId: normalizeOptionalString(mikrotikDeviceId),
-        oltDeviceId: normalizeOptionalString(oltDeviceId),
         lastCheckedAt: null,
         lastSeenAt: null,
         latencyMs: null,
@@ -1577,8 +1316,6 @@ app.patch('/api/nodes/:id', requireEditAccess, async (req, res) => {
       pppoeUsername,
       monitoringEnabled,
       monitoringMethod,
-      mikrotikDeviceId,
-      oltDeviceId,
       customerName,
       customerPhone,
       customerAddress,
@@ -1657,22 +1394,6 @@ app.patch('/api/nodes/:id', requireEditAccess, async (req, res) => {
       }
     }
 
-    const finalMikrotikDeviceId =
-      mikrotikDeviceId !== undefined
-        ? normalizeOptionalString(mikrotikDeviceId)
-        : existingNode.mikrotikDeviceId
-
-    const finalOltDeviceId =
-      oltDeviceId !== undefined
-        ? normalizeOptionalString(oltDeviceId)
-        : existingNode.oltDeviceId
-
-    await validateNodeMonitoringDevices({
-      monitoringMethod: finalMonitoringMethod,
-      mikrotikDeviceId: finalMikrotikDeviceId,
-      oltDeviceId: finalOltDeviceId,
-    })
-
     const updatedNode = await prisma.node.update({
       where: {
         id,
@@ -1700,8 +1421,6 @@ app.patch('/api/nodes/:id', requireEditAccess, async (req, res) => {
             ? monitoringEnabled
             : existingNode.monitoringEnabled,
         monitoringMethod: finalMonitoringMethod,
-        mikrotikDeviceId: finalMikrotikDeviceId,
-        oltDeviceId: finalOltDeviceId,
 
         customerName: valueOrExistingString(customerName, existingNode.customerName),
         customerPhone: valueOrExistingString(customerPhone, existingNode.customerPhone),
@@ -2468,103 +2187,6 @@ type MonitoringLogInput = {
   title?: string | null
   message: string
   metadata?: unknown
-}
-
-
-function parseNetworkDeviceType(value: unknown): NetworkDeviceType | null {
-  if (!value) return null
-
-  return allowedNetworkDeviceTypes.includes(value as NetworkDeviceType)
-    ? (value as NetworkDeviceType)
-    : null
-}
-
-function getDefaultNetworkDevicePort(type: NetworkDeviceType) {
-  if (type === 'MIKROTIK') return 8728
-  return 22
-}
-
-function encryptSecret(value: string | null): string | null {
-  if (!value) return null
-
-  const key = crypto.createHash('sha256').update(JWT_SECRET).digest()
-  const iv = crypto.randomBytes(12)
-  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv)
-  const encrypted = Buffer.concat([
-    cipher.update(value, 'utf8'),
-    cipher.final(),
-  ])
-  const authTag = cipher.getAuthTag()
-
-  return [
-    'aes256gcm',
-    iv.toString('base64url'),
-    authTag.toString('base64url'),
-    encrypted.toString('base64url'),
-  ].join('$')
-}
-
-function sanitizeNetworkDevice(device: NetworkDevice) {
-  return {
-    id: device.id,
-    name: device.name,
-    type: device.type,
-    host: device.host,
-    port: device.port,
-    username: device.username,
-    hasPassword: Boolean(device.passwordEncrypted),
-    brand: device.brand,
-    model: device.model,
-    notes: device.notes,
-    isActive: device.isActive,
-    connectionStatus: device.connectionStatus,
-    lastConnectedAt: device.lastConnectedAt,
-    lastConnectionMessage: device.lastConnectionMessage,
-    createdAt: device.createdAt,
-    updatedAt: device.updatedAt,
-  }
-}
-
-async function validateNodeMonitoringDevices(input: {
-  monitoringMethod: MonitoringMethod
-  mikrotikDeviceId?: string | null
-  oltDeviceId?: string | null
-}) {
-  if (input.mikrotikDeviceId) {
-    const mikrotikDevice = await prisma.networkDevice.findUnique({
-      where: { id: input.mikrotikDeviceId },
-    })
-
-    if (!mikrotikDevice || mikrotikDevice.type !== 'MIKROTIK') {
-      const error = new Error('Perangkat MikroTik tidak ditemukan atau tipe perangkat tidak sesuai.')
-      ;(error as Error & { statusCode?: number }).statusCode = 400
-      throw error
-    }
-  }
-
-  if (input.oltDeviceId) {
-    const oltDevice = await prisma.networkDevice.findUnique({
-      where: { id: input.oltDeviceId },
-    })
-
-    if (!oltDevice || oltDevice.type !== 'OLT') {
-      const error = new Error('Perangkat OLT tidak ditemukan atau tipe perangkat tidak sesuai.')
-      ;(error as Error & { statusCode?: number }).statusCode = 400
-      throw error
-    }
-  }
-
-  if (input.monitoringMethod === 'PPPOE' && !input.mikrotikDeviceId) {
-    const error = new Error('Mode PPPoE wajib memilih perangkat MikroTik.')
-    ;(error as Error & { statusCode?: number }).statusCode = 400
-    throw error
-  }
-
-  if (input.monitoringMethod === 'OLT' && !input.oltDeviceId) {
-    const error = new Error('Mode OLT wajib memilih perangkat OLT.')
-    ;(error as Error & { statusCode?: number }).statusCode = 400
-    throw error
-  }
 }
 
 function normalizeOptionalString(value: unknown): string | null {

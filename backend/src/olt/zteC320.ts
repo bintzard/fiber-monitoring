@@ -58,9 +58,7 @@ export function getOltConfigFromEnv(): OltConnectionConfig {
   }
 }
 
-export async function testOltConnection() {
-  const config = getOltConfigFromEnv()
-
+export async function testOltConnection(config = getOltConfigFromEnv()) {
   const result = await runZteC320Commands(['show clock'], config)
 
   return {
@@ -71,7 +69,10 @@ export async function testOltConnection() {
   }
 }
 
-export async function checkZteC320Onu(onuInterface: string): Promise<ParsedOnuDetail> {
+export async function checkZteC320Onu(
+  onuInterface: string,
+  config = getOltConfigFromEnv(),
+): Promise<ParsedOnuDetail> {
   const parts = parseOnuInterfaceParts(onuInterface)
 
   // Pada sebagian ZTE C320, command detail-info tidak aktif/berbeda sehingga muncul:
@@ -84,7 +85,7 @@ export async function checkZteC320Onu(onuInterface: string): Promise<ParsedOnuDe
     `show gpon onu detail-info ${parts.onuInterface}`,
   ]
 
-  const result = await runZteC320Commands(commands)
+  const result = await runZteC320Commands(commands, config)
 
   return parseOnuDetailOutput(parts.onuInterface, result.output)
 }

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import type { NetworkNode } from '../types/network'
 import { getAuthToken } from '../api/auth'
@@ -21,9 +21,20 @@ type ClientExtraFields = NetworkNode & {
   onuInterface?: string | null
   onuStatus?: string | null
   onuRxPower?: number | null
+  mikrotikDeviceId?: string | null
+  oltDeviceId?: string | null
 }
 
 type MonitoringMethod = 'MANUAL' | 'PING' | 'PPPOE' | 'OLT' | 'SNMP'
+
+interface NetworkDeviceOption {
+  id: string
+  name: string
+  type: 'MIKROTIK' | 'OLT'
+  host: string
+  port: number
+  isActive: boolean
+}
 
 interface EditClientFormProps {
   node: NetworkNode
@@ -57,6 +68,12 @@ export default function EditClientForm({
     (node.monitoringMethod as MonitoringMethod) || 'PPPOE',
   )
   const [onuInterface, setOnuInterface] = useState(extraNode.onuInterface || '')
+  const [mikrotikDeviceId, setMikrotikDeviceId] = useState(
+    extraNode.mikrotikDeviceId || '',
+  )
+  const [oltDeviceId, setOltDeviceId] = useState(extraNode.oltDeviceId || '')
+  const [networkDevices, setNetworkDevices] = useState<NetworkDeviceOption[]>([])
+  const [deviceMessage, setDeviceMessage] = useState('')
   const [latitude, setLatitude] = useState(String(node.latitude))
   const [longitude, setLongitude] = useState(String(node.longitude))
 
@@ -72,13 +89,82 @@ export default function EditClientForm({
     [odpOptions],
   )
 
+  const mikrotikOptions = useMemo(
+    () =>
+      networkDevices
+        .filter((device) => device.type === 'MIKROTIK' && device.isActive)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [networkDevices],
+  )
+
+  const oltOptions = useMemo(
+    () =>
+      networkDevices
+        .filter((device) => device.type === 'OLT' && device.isActive)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [networkDevices],
+  )
+
+  useEffect(() => {
+    let isMounted = true
+
+    async function fetchNetworkDevices() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/network-devices`, {
+          headers: getAuthorizedJsonHeaders(),
+        })
+        const data = await response.json()
+
+        if (!response.ok) {
+          throw new Error(data.message || 'Gagal mengambil daftar perangkat monitoring')
+        }
+
+        if (isMounted) {
+          setNetworkDevices(data.devices || [])
+          setDeviceMessage('')
+        }
+      } catch (error) {
+        if (isMounted) {
+          setDeviceMessage(
+            error instanceof Error
+              ? error.message
+              : 'Perangkat monitoring belum bisa dimuat.',
+          )
+        }
+      }
+    }
+
+    void fetchNetworkDevices()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
+  function handleMonitoringMethodChange(nextMethod: MonitoringMethod) {
+    setMonitoringMethod(nextMethod)
+
+    if (nextMethod !== 'PPPOE') {
+      setMikrotikDeviceId('')
+    }
+
+    if (nextMethod !== 'OLT') {
+      setOltDeviceId('')
+      setOnuInterface('')
+    }
+  }
+
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
     setLoading(true)
     setMessage('')
 
     try {
-      if (!customerName.trim()) {
+      const cleanCustomerName = customerName.trim()
+      const cleanPppoeUsername = pppoeUsername.trim()
+      const cleanOnuInterface = onuInterface.trim()
+
+      if (!cleanCustomerName) {
         throw new Error('Nama client wajib diisi.')
       }
 
@@ -86,12 +172,20 @@ export default function EditClientForm({
         throw new Error('Pilih ODP terlebih dahulu.')
       }
 
-      if (monitoringMethod === 'PPPOE' && !pppoeUsername.trim()) {
+      if (monitoringMethod === 'PPPOE' && !cleanPppoeUsername) {
         throw new Error('Username PPPoE wajib diisi jika monitoring memakai PPPoE.')
       }
 
-      if (monitoringMethod === 'OLT' && !onuInterface.trim()) {
+      if (monitoringMethod === 'PPPOE' && !mikrotikDeviceId) {
+        throw new Error('Pilih MikroTik untuk monitoring PPPoE.')
+      }
+
+      if (monitoringMethod === 'OLT' && !cleanOnuInterface) {
         throw new Error('ONU Interface wajib diisi jika monitoring memakai OLT.')
+      }
+
+      if (monitoringMethod === 'OLT' && !oltDeviceId) {
+        throw new Error('Pilih OLT untuk monitoring ONU.')
       }
 
       if (!latitude || !longitude) {
@@ -109,7 +203,7 @@ export default function EditClientForm({
         method: 'PATCH',
         headers: getAuthorizedJsonHeaders(),
         body: JSON.stringify({
-          name: customerName.trim(),
+          name: cleanCustomerName,
           type: 'CLIENT',
           ipAddress: node.ipAddress || null,
           latitude: finalLatitude,
@@ -117,13 +211,20 @@ export default function EditClientForm({
           status: node.status,
           rxPower: node.rxPower ?? null,
           parentId,
-          pppoeUsername: pppoeUsername.trim() || null,
+
+          pppoeUsername: monitoringMethod === 'PPPOE' ? cleanPppoeUsername : null,
           monitoringEnabled: monitoringMethod !== 'MANUAL',
           monitoringMethod,
-          onuInterface: onuInterface.trim() || null,
-          onuStatus: onuInterface.trim() ? extraNode.onuStatus || 'UNKNOWN' : null,
+          mikrotikDeviceId:
+            monitoringMethod === 'PPPOE' ? mikrotikDeviceId || null : null,
+          oltDeviceId: monitoringMethod === 'OLT' ? oltDeviceId || null : null,
+          onuInterface: monitoringMethod === 'OLT' ? cleanOnuInterface || null : null,
+          onuStatus:
+            monitoringMethod === 'OLT' && cleanOnuInterface
+              ? extraNode.onuStatus || 'UNKNOWN'
+              : null,
 
-          customerName: customerName.trim(),
+          customerName: cleanCustomerName,
           customerPhone: customerPhone.trim() || null,
           customerAddress: customerAddress.trim() || null,
           installationStatus: 'ACTIVE',
@@ -148,13 +249,15 @@ export default function EditClientForm({
     }
   }
 
-
-
   async function handleCheckOlt() {
     setCheckingOlt(true)
     setMessage('')
 
     try {
+      if (!oltDeviceId) {
+        throw new Error('Pilih OLT terlebih dahulu sebelum cek ONU.')
+      }
+
       if (!onuInterface.trim()) {
         throw new Error('ONU Interface wajib diisi sebelum cek OLT.')
       }
@@ -164,6 +267,7 @@ export default function EditClientForm({
         headers: getAuthorizedJsonHeaders(),
         body: JSON.stringify({
           nodeId: node.id,
+          oltDeviceId,
           onuInterface: onuInterface.trim(),
         }),
       })
@@ -246,7 +350,9 @@ export default function EditClientForm({
         <label>Metode Monitoring</label>
         <select
           value={monitoringMethod}
-          onChange={(event) => setMonitoringMethod(event.target.value as MonitoringMethod)}
+          onChange={(event) =>
+            handleMonitoringMethodChange(event.target.value as MonitoringMethod)
+          }
         >
           <option value="PPPOE">PPPoE MikroTik</option>
           <option value="OLT">OLT ZTE C320 / ONU</option>
@@ -254,16 +360,58 @@ export default function EditClientForm({
           <option value="MANUAL">Manual</option>
         </select>
 
-        <label>Username PPPoE</label>
-        <input
-          value={pppoeUsername}
-          onChange={(event) => setPppoeUsername(event.target.value)}
-          placeholder="Contoh: 1/2/3:11_budi"
-          required={monitoringMethod === 'PPPOE'}
-        />
+        {deviceMessage && (
+          <p className="form-message form-message-error">{deviceMessage}</p>
+        )}
+
+        {monitoringMethod === 'PPPOE' && (
+          <>
+            <label>Pilih MikroTik</label>
+            <select
+              value={mikrotikDeviceId}
+              onChange={(event) => setMikrotikDeviceId(event.target.value)}
+              required
+            >
+              <option value="">
+                {mikrotikOptions.length > 0
+                  ? '-- Pilih MikroTik --'
+                  : 'Belum ada MikroTik aktif'}
+              </option>
+              {mikrotikOptions.map((device) => (
+                <option key={device.id} value={device.id}>
+                  {device.name} ({device.host}:{device.port})
+                </option>
+              ))}
+            </select>
+
+            <label>Username PPPoE</label>
+            <input
+              value={pppoeUsername}
+              onChange={(event) => setPppoeUsername(event.target.value)}
+              placeholder="Contoh: 1/2/3:11_budi"
+              required
+            />
+          </>
+        )}
 
         {monitoringMethod === 'OLT' && (
           <>
+            <label>Pilih OLT</label>
+            <select
+              value={oltDeviceId}
+              onChange={(event) => setOltDeviceId(event.target.value)}
+              required
+            >
+              <option value="">
+                {oltOptions.length > 0 ? '-- Pilih OLT --' : 'Belum ada OLT aktif'}
+              </option>
+              {oltOptions.map((device) => (
+                <option key={device.id} value={device.id}>
+                  {device.name} ({device.host}:{device.port})
+                </option>
+              ))}
+            </select>
+
             <label>ONU Interface OLT</label>
             <input
               value={onuInterface}

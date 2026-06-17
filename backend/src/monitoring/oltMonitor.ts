@@ -1,11 +1,13 @@
+import crypto from 'crypto'
 import type { Server } from 'socket.io'
 import { prisma } from '../prisma'
-import { checkZteC320Onu } from '../olt/zteC320'
+import { checkZteC320Onu, getOltConfigFromEnv, type OltConnectionConfig } from '../olt/zteC320'
 import type {
   Prisma,
   Cable,
   CableStatus,
   MonitoringLogEventType,
+  NetworkDevice,
   Node,
   NodeStatus,
 } from '../generated/prisma/client'
@@ -54,6 +56,105 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function decryptSecret(value: string | null) {
+  if (!value) return ''
+
+  // Fallback untuk data lama/manual yang masih plain text.
+  if (!value.startsWith('aes256gcm$')) {
+    return value
+  }
+
+  try {
+    const [, ivRaw, authTagRaw, encryptedRaw] = value.split('$')
+
+    if (!ivRaw || !authTagRaw || !encryptedRaw) {
+      return ''
+    }
+
+    const jwtSecret = process.env.JWT_SECRET || 'dev-secret-change-this-before-production'
+    const key = crypto.createHash('sha256').update(jwtSecret).digest()
+
+    const iv = Buffer.from(ivRaw, 'base64url')
+    const authTag = Buffer.from(authTagRaw, 'base64url')
+    const encrypted = Buffer.from(encryptedRaw, 'base64url')
+
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv)
+    decipher.setAuthTag(authTag)
+
+    return Buffer.concat([
+      decipher.update(encrypted),
+      decipher.final(),
+    ]).toString('utf8')
+  } catch (error) {
+    console.error('[OLT] Gagal decrypt password perangkat:', error)
+    return ''
+  }
+}
+
+function getDevicePassword(device: NetworkDevice) {
+  return decryptSecret(device.passwordEncrypted)
+}
+
+function validateOltDevice(device: NetworkDevice) {
+  return (
+    device.type === 'OLT' &&
+    device.isActive &&
+    Boolean(device.host) &&
+    Boolean(device.port) &&
+    Boolean(device.username) &&
+    Boolean(getDevicePassword(device))
+  )
+}
+
+function buildOltConfigFromDevice(device: NetworkDevice): OltConnectionConfig {
+  return {
+    host: device.host,
+    port: device.port,
+    username: device.username || '',
+    password: getDevicePassword(device),
+    readyTimeoutMs: Number(process.env.OLT_READY_TIMEOUT_MS || 15000),
+    commandTimeoutMs: Number(process.env.OLT_COMMAND_TIMEOUT_MS || 35000),
+  }
+}
+
+async function updateOltDeviceConnected(device: NetworkDevice | null | undefined) {
+  if (!device) return
+
+  await prisma.networkDevice.update({
+    where: {
+      id: device.id,
+    },
+    data: {
+      connectionStatus: 'CONNECTED',
+      lastConnectedAt: new Date(),
+      lastConnectionMessage: `Terhubung ke ${device.host}:${device.port}`,
+    },
+  })
+}
+
+async function updateOltDeviceError(device: NetworkDevice | null | undefined, error: unknown) {
+  if (!device) return
+
+  await prisma.networkDevice.update({
+    where: {
+      id: device.id,
+    },
+    data: {
+      connectionStatus: 'ERROR',
+      lastConnectionMessage:
+        error instanceof Error ? error.message : 'Gagal konek ke OLT',
+    },
+  })
+}
+
+function getFallbackOltConfig() {
+  try {
+    return getOltConfigFromEnv()
+  } catch {
+    return null
+  }
+}
+
 async function runOltCheck(io: Server) {
   if (isRunning) {
     console.log('[OLT] Skip check: previous OLT check is still running.')
@@ -81,16 +182,48 @@ async function runOltCheck(io: Server) {
       return
     }
 
-    console.log(`[OLT] Checking ${monitoredNodes.length} ONU client(s)...`)
+    const oltDevices = await prisma.networkDevice.findMany({
+      where: {
+        type: 'OLT',
+        isActive: true,
+      },
+      orderBy: {
+        name: 'asc',
+      },
+    })
+
+    const validOltDevices = oltDevices.filter(validateOltDevice)
+    const deviceMap = new Map(validOltDevices.map((device) => [device.id, device]))
+    const fallbackConfig = getFallbackOltConfig()
+
+    console.log(
+      `[OLT] Checking ${monitoredNodes.length} ONU client(s). Device OLT aktif: ${validOltDevices.length}.`,
+    )
 
     const delayMs = getBatchDelayMs()
 
     for (const node of monitoredNodes) {
       if (!node.onuInterface) continue
 
+      const selectedDevice = node.oltDeviceId
+        ? deviceMap.get(node.oltDeviceId)
+        : null
+
+      const config = selectedDevice
+        ? buildOltConfigFromDevice(selectedDevice)
+        : fallbackConfig
+
+      if (!config) {
+        console.warn(
+          `[OLT] Skip ${node.name}: belum ada OLT Device aktif dan konfigurasi .env tidak tersedia.`,
+        )
+        continue
+      }
+
       try {
-        await checkOneOltNode(io, node)
+        await checkOneOltNode(io, node, config, selectedDevice)
       } catch (error) {
+        await updateOltDeviceError(selectedDevice, error)
         console.error(`[OLT] Gagal cek ${node.name} (${node.onuInterface}):`, error)
       }
 
@@ -105,10 +238,16 @@ async function runOltCheck(io: Server) {
   }
 }
 
-async function checkOneOltNode(io: Server, node: Node) {
+async function checkOneOltNode(
+  io: Server,
+  node: Node,
+  config: OltConnectionConfig,
+  oltDevice?: NetworkDevice | null,
+) {
   if (!node.onuInterface) return
 
-  const result = await checkZteC320Onu(node.onuInterface)
+  const result = await checkZteC320Onu(node.onuInterface, config)
+  await updateOltDeviceConnected(oltDevice)
   const nextStatus = mapOnuStatusToNodeStatus(result.onuStatus, result.onuRxPower)
   const now = new Date()
 
