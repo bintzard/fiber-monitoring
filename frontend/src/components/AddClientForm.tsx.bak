@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import type { NetworkNode } from "../types/network";
 import { getAuthToken } from "../api/auth";
@@ -30,15 +30,6 @@ interface AddClientFormProps {
 
 type MonitoringMethod = "MANUAL" | "PING" | "PPPOE" | "OLT" | "SNMP";
 
-interface NetworkDeviceOption {
-  id: string;
-  name: string;
-  type: "MIKROTIK" | "OLT";
-  host: string;
-  port: number;
-  isActive: boolean;
-}
-
 export default function AddClientForm({
   latitude,
   longitude,
@@ -61,10 +52,6 @@ export default function AddClientForm({
     useState<MonitoringMethod>("PPPOE");
   const [pppoeUsername, setPppoeUsername] = useState("");
   const [onuInterface, setOnuInterface] = useState("");
-  const [mikrotikDeviceId, setMikrotikDeviceId] = useState("");
-  const [oltDeviceId, setOltDeviceId] = useState("");
-  const [networkDevices, setNetworkDevices] = useState<NetworkDeviceOption[]>([]);
-  const [deviceMessage, setDeviceMessage] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [generatingId, setGeneratingId] = useState(false);
@@ -77,48 +64,6 @@ export default function AddClientForm({
         .sort((a, b) => a.name.localeCompare(b.name)),
     [odpOptions],
   );
-
-  const mikrotikOptions = useMemo(
-    () =>
-      networkDevices
-        .filter((device) => device.type === "MIKROTIK" && device.isActive)
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    [networkDevices],
-  );
-
-  const oltOptions = useMemo(
-    () =>
-      networkDevices
-        .filter((device) => device.type === "OLT" && device.isActive)
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    [networkDevices],
-  );
-
-  useEffect(() => {
-    async function fetchNetworkDevices() {
-      try {
-        setDeviceMessage("");
-        const response = await fetch(`${API_BASE_URL}/api/network-devices`, {
-          headers: getAuthorizedJsonHeaders(),
-        });
-        const data = await response.json();
-
-        if (!response.ok) {
-          throw new Error(data.message || "Gagal mengambil daftar perangkat monitoring");
-        }
-
-        setNetworkDevices(data.devices || []);
-      } catch (error) {
-        setDeviceMessage(
-          error instanceof Error
-            ? error.message
-            : "Perangkat monitoring belum bisa dimuat.",
-        );
-      }
-    }
-
-    void fetchNetworkDevices();
-  }, []);
 
   async function handleGenerateId() {
     setGeneratingId(true);
@@ -180,22 +125,10 @@ export default function AddClientForm({
         );
       }
 
-      if (
-        monitoringMethod === "PPPOE" &&
-        mikrotikOptions.length > 0 &&
-        !mikrotikDeviceId
-      ) {
-        throw new Error("Pilih MikroTik untuk monitoring PPPoE.");
-      }
-
       if (monitoringMethod === "OLT" && !cleanOnuInterface) {
         throw new Error(
           "ONU Interface wajib diisi jika monitoring memakai OLT.",
         );
-      }
-
-      if (monitoringMethod === "OLT" && oltOptions.length > 0 && !oltDeviceId) {
-        throw new Error("Pilih OLT untuk monitoring ONU.");
       }
 
       const response = await fetch(`${API_BASE_URL}/api/nodes`, {
@@ -216,9 +149,6 @@ export default function AddClientForm({
           pppoeUsername: cleanPppoeUsername || null,
           monitoringEnabled: monitoringMethod !== "MANUAL",
           monitoringMethod,
-          mikrotikDeviceId:
-            monitoringMethod === "PPPOE" ? mikrotikDeviceId || null : null,
-          oltDeviceId: monitoringMethod === "OLT" ? oltDeviceId || null : null,
           onuInterface: cleanOnuInterface || null,
           onuStatus: cleanOnuInterface ? "UNKNOWN" : null,
           onuRxPower: null,
@@ -250,8 +180,6 @@ export default function AddClientForm({
       setMonitoringMethod("PPPOE");
       setPppoeUsername("");
       setOnuInterface("");
-      setMikrotikDeviceId("");
-      setOltDeviceId("");
       onLatitudeChange("");
       onLongitudeChange("");
 
@@ -340,28 +268,8 @@ export default function AddClientForm({
         <option value="MANUAL">Manual</option>
       </select>
 
-      {deviceMessage && <p className="form-message form-message-error">{deviceMessage}</p>}
-
       {monitoringMethod === "PPPOE" && (
         <>
-          <label>Pilih MikroTik</label>
-          <select
-            value={mikrotikDeviceId}
-            onChange={(event) => setMikrotikDeviceId(event.target.value)}
-            required={mikrotikOptions.length > 0}
-          >
-            <option value="">
-              {mikrotikOptions.length > 0
-                ? "-- Pilih MikroTik --"
-                : "Belum ada MikroTik aktif"}
-            </option>
-            {mikrotikOptions.map((device) => (
-              <option key={device.id} value={device.id}>
-                {device.name} ({device.host}:{device.port})
-              </option>
-            ))}
-          </select>
-
           <label>Username PPPoE</label>
           <input
             value={pppoeUsername}
@@ -374,22 +282,6 @@ export default function AddClientForm({
 
       {monitoringMethod === "OLT" && (
         <>
-          <label>Pilih OLT</label>
-          <select
-            value={oltDeviceId}
-            onChange={(event) => setOltDeviceId(event.target.value)}
-            required={oltOptions.length > 0}
-          >
-            <option value="">
-              {oltOptions.length > 0 ? "-- Pilih OLT --" : "Belum ada OLT aktif"}
-            </option>
-            {oltOptions.map((device) => (
-              <option key={device.id} value={device.id}>
-                {device.name} ({device.host}:{device.port})
-              </option>
-            ))}
-          </select>
-
           <label>ONU Interface OLT</label>
           <input
             value={onuInterface}

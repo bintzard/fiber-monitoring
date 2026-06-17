@@ -49,18 +49,6 @@ enum MonitoringMethod {
   SNMP
 }
 
-enum NetworkDeviceType {
-  MIKROTIK
-  OLT
-}
-
-enum NetworkDeviceConnectionStatus {
-  UNKNOWN
-  CONNECTED
-  DISCONNECTED
-  ERROR
-}
-
 enum InstallationStatus {
   PROSPECT
   REGISTERED
@@ -122,8 +110,6 @@ model Node {
   pppoeUsername     String?
   monitoringEnabled Boolean          @default(false)
   monitoringMethod  MonitoringMethod @default(MANUAL)
-  mikrotikDeviceId  String?
-  oltDeviceId       String?
   lastCheckedAt     DateTime?
   lastSeenAt        DateTime?
   offlineSince      DateTime?
@@ -180,9 +166,6 @@ model Node {
   parent   Node?  @relation("NodeParent", fields: [parentId], references: [id])
   children Node[] @relation("NodeParent")
 
-  mikrotikDevice NetworkDevice? @relation("NodeMikrotikDevice", fields: [mikrotikDeviceId], references: [id])
-  oltDevice      NetworkDevice? @relation("NodeOltDevice", fields: [oltDeviceId], references: [id])
-
   fromCables Cable[] @relation("CableFromNode")
   toCables   Cable[] @relation("CableToNode")
 
@@ -194,39 +177,9 @@ model Node {
   @@index([pppoeUsername])
   @@index([monitoringEnabled])
   @@index([monitoringMethod])
-  @@index([mikrotikDeviceId])
-  @@index([oltDeviceId])
   @@index([installationStatus])
   @@index([onuInterface])
   @@index([onuSerialNumber])
-}
-
-model NetworkDevice {
-  id                      String                        @id @default(cuid())
-  name                    String
-  type                    NetworkDeviceType
-  host                    String
-  port                    Int
-  username                String?
-  passwordEncrypted       String?
-  brand                   String?
-  model                   String?
-  notes                   String?
-  isActive                Boolean                       @default(true)
-  connectionStatus        NetworkDeviceConnectionStatus @default(UNKNOWN)
-  lastConnectedAt         DateTime?
-  lastConnectionMessage   String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  mikrotikClients Node[] @relation("NodeMikrotikDevice")
-  oltClients      Node[] @relation("NodeOltDevice")
-
-  @@index([type])
-  @@index([isActive])
-  @@index([connectionStatus])
-  @@index([host])
 }
 
 model Cable {
