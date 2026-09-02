@@ -3792,3 +3792,16 @@ button.map-action-btn.logout-red-btn:hover {
     grid-template-columns: 1fr;
   }
 }
+
+/* Sembunyikan SEMUA kabel saat zoom sangat jauh (zoom level 5 - 14) */
+.leaflet-container:not(.leaflet-zoom-15):not(.leaflet-zoom-16):not(.leaflet-zoom-17):not(.leaflet-zoom-18):not(.leaflet-zoom-19):not(.leaflet-zoom-20):not(.leaflet-zoom-21):not(.leaflet-zoom-22) .fiber-cable {
+  display: none !important;
+}
+
+/* Sembunyikan khusus kabel DROP_WIRE saat zoom sedang (zoom level 15 & 16) */
+.leaflet-zoom-15 .cable-drop,
+.leaflet-zoom-15 .cable-drop-static,
+.leaflet-zoom-16 .cable-drop,
+.leaflet-zoom-16 .cable-drop-static {
+  display: none !important;
+}

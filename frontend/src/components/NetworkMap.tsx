@@ -1,4 +1,4 @@
-import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   MapContainer,
   Marker,
@@ -18,6 +18,8 @@ import EditNodeForm from './EditNodeForm'
 import AdminPanel from './AdminPanel'
 import AddClientForm from './AddClientForm'
 import EditClientForm from './EditClientForm'
+import MarkerClusterGroup from './MarkerCluster'
+import CableLayer from './CableLayer'
 
 const API_BASE_URL =
   import.meta.env.VITE_API_URL ||
@@ -131,6 +133,21 @@ interface MapResizeControllerProps {
   trigger: boolean
 }
 
+function OfflineDurationDisplay({ offlineSince }: { offlineSince: string | null }) {
+  const [duration, setDuration] = useState(() => formatOfflineDuration(offlineSince, Date.now()))
+
+  useEffect(() => {
+    if (!offlineSince) return
+    const timer = window.setInterval(() => {
+      setDuration(formatOfflineDuration(offlineSince, Date.now()))
+    }, 1000)
+
+    return () => window.clearInterval(timer)
+  }, [offlineSince])
+
+  return <b>{duration}</b>
+}
+
 function MapClickHandler({
   isPickingLocation,
   onPickLocation,
@@ -221,9 +238,8 @@ function getMarkerColor(status: string) {
 function createMarkerIcon(
   node: NetworkNode,
   isHighlighted = false,
-  allNodes: NetworkNode[] = [],
+  capacityInfo: OdpPortCapacityInfo | null = null,
 ) {
-  const capacityInfo = getOdpPortCapacityInfo(node, allNodes)
   const shouldUseCapacityColor =
     node.type === 'ODP' &&
     node.status !== 'OFFLINE' &&
@@ -282,220 +298,6 @@ function createSelectedLocationIcon() {
   })
 }
 
-
-function getDropWireClient(cable: Cable, allNodes: NetworkNode[]) {
-  if (cable.type !== 'DROP_WIRE') return null
-
-  return (
-    allNodes.find(
-      (node) => node.id === cable.toNodeId && node.type === 'CLIENT',
-    ) ||
-    allNodes.find(
-      (node) => node.id === cable.fromNodeId && node.type === 'CLIENT',
-    ) ||
-    null
-  )
-}
-
-function getCableVisualStatus(cable: Cable, allNodes: NetworkNode[]) {
-  if (cable.type === 'DROP_WIRE') {
-    const clientNode = getDropWireClient(cable, allNodes)
-
-    if (clientNode) return clientNode.status
-    if (cable.status === 'BROKEN') return 'OFFLINE'
-    if (cable.status === 'AFFECTED') return 'WARNING'
-    if (cable.status === 'NORMAL') return 'ONLINE'
-
-    return 'UNKNOWN'
-  }
-
-  if (cable.status === 'BROKEN') return 'OFFLINE'
-  if (cable.status === 'AFFECTED') return 'WARNING'
-  if (cable.status === 'NORMAL') return 'ONLINE'
-
-  return 'UNKNOWN'
-}
-
-function getCableStyle(
-  cable: Cable,
-  isHighlighted = false,
-  allNodes: NetworkNode[] = [],
-  cableAnimationEnabled = false,
-): L.PolylineOptions {
-  if (isHighlighted) {
-    return {
-      color: '#0ea5e9',
-      weight: 7,
-      opacity: 1,
-      dashArray: '10 6',
-      className: cableAnimationEnabled
-        ? 'fiber-cable fault-cable-highlight'
-        : 'fiber-cable cable-static cable-selected-static',
-    }
-  }
-
-  if (cable.type === 'BACKBONE') {
-    if (!cableAnimationEnabled) {
-      return {
-        color: cable.status === 'BROKEN' ? '#ef4444' : '#2563eb',
-        weight: cable.status === 'BROKEN' ? 6 : 5,
-        opacity: cable.status === 'BROKEN' ? 0.95 : 0.82,
-        dashArray: cable.status === 'BROKEN' ? '8 8' : undefined,
-        className: `fiber-cable cable-static cable-backbone-static cable-static-${cable.status.toLowerCase()}`,
-      }
-    }
-
-    return {
-      color: cable.status === 'BROKEN' ? '#ef4444' : '#2563eb',
-      weight: 6,
-      opacity: 0.95,
-      dashArray: cable.status === 'BROKEN' ? '8 8' : '14 10',
-      className:
-        cable.status === 'BROKEN'
-          ? 'fiber-cable cable-animated cable-broken cable-animated-broken'
-          : 'fiber-cable cable-animated cable-flow cable-backbone cable-animated-backbone',
-    }
-  }
-
-  if (cable.type === 'DISTRIBUTION') {
-    const cableColor =
-      cable.status === 'BROKEN'
-        ? '#ef4444'
-        : cable.status === 'AFFECTED'
-          ? '#f59e0b'
-          : '#22c55e'
-
-    if (!cableAnimationEnabled) {
-      return {
-        color: cableColor,
-        weight: cable.status === 'NORMAL' ? 3 : 4,
-        opacity: cable.status === 'NORMAL' ? 0.82 : 0.95,
-        dashArray: cable.status === 'NORMAL' ? undefined : '8 8',
-        className: `fiber-cable cable-static cable-distribution-static cable-static-${cable.status.toLowerCase()}`,
-      }
-    }
-
-    return {
-      color: cableColor,
-      weight: 4,
-      opacity: 0.9,
-      dashArray:
-        cable.status === 'AFFECTED' || cable.status === 'BROKEN'
-          ? '8 8'
-          : '12 10',
-      className:
-        cable.status === 'BROKEN'
-          ? 'fiber-cable cable-animated cable-broken cable-animated-broken'
-          : cable.status === 'AFFECTED'
-            ? 'fiber-cable cable-animated cable-affected cable-animated-warning'
-            : 'fiber-cable cable-animated cable-flow cable-distribution cable-animated-distribution',
-    }
-  }
-
-  if (cable.type === 'DROP_WIRE') {
-    const visualStatus = getCableVisualStatus(cable, allNodes)
-
-    if (!cableAnimationEnabled) {
-      if (visualStatus === 'OFFLINE') {
-        return {
-          color: '#ef4444',
-          weight: 3,
-          opacity: 0.95,
-          dashArray: '7 7',
-          className: 'fiber-cable cable-static cable-drop-static cable-static-offline',
-        }
-      }
-
-      if (visualStatus === 'WARNING') {
-        return {
-          color: '#f59e0b',
-          weight: 3,
-          opacity: 0.95,
-          dashArray: '9 7',
-          className: 'fiber-cable cable-static cable-drop-static cable-static-warning',
-        }
-      }
-
-      if (visualStatus === 'ONLINE') {
-        return {
-          color: '#22c55e',
-          weight: 2.5,
-          opacity: 0.78,
-          dashArray: undefined,
-          className: 'fiber-cable cable-static cable-drop-static cable-static-online',
-        }
-      }
-
-      return {
-        color: '#94a3b8',
-        weight: 2,
-        opacity: 0.68,
-        dashArray: '5 7',
-        className: 'fiber-cable cable-static cable-drop-static cable-static-unknown',
-      }
-    }
-
-    if (visualStatus === 'OFFLINE') {
-      return {
-        color: '#ef4444',
-        weight: 4,
-        opacity: 1,
-        dashArray: '8 8',
-        className: 'fiber-cable cable-animated cable-drop cable-drop-offline cable-broken cable-animated-broken',
-      }
-    }
-
-    if (visualStatus === 'WARNING') {
-      return {
-        color: '#f59e0b',
-        weight: 4,
-        opacity: 0.98,
-        dashArray: '10 8',
-        className: 'fiber-cable cable-animated cable-drop cable-drop-warning cable-affected cable-animated-warning',
-      }
-    }
-
-    if (visualStatus === 'ONLINE') {
-      return {
-        color: '#22c55e',
-        weight: 3,
-        opacity: 0.98,
-        dashArray: '14 9',
-        className: 'fiber-cable cable-animated cable-drop cable-drop-online cable-flow cable-drop-green cable-animated-drop-online',
-      }
-    }
-
-    return {
-      color: '#94a3b8',
-      weight: 2,
-      opacity: 0.82,
-      dashArray: '6 8',
-      className: 'fiber-cable cable-animated cable-drop cable-drop-unknown cable-animated-unknown',
-    }
-  }
-
-  if (!cableAnimationEnabled) {
-    return {
-      color: cable.status === 'BROKEN' ? '#ef4444' : '#22c55e',
-      weight: cable.status === 'BROKEN' ? 4 : 3,
-      opacity: 0.82,
-      dashArray: cable.status === 'BROKEN' ? '8 6' : undefined,
-      className: `fiber-cable cable-static cable-static-${cable.status.toLowerCase()}`,
-    }
-  }
-
-  return {
-    color: cable.status === 'BROKEN' ? '#ef4444' : '#22c55e',
-    weight: cable.status === 'BROKEN' ? 4 : 3,
-    opacity: 0.95,
-    dashArray: cable.status === 'BROKEN' ? '8 6' : '12 10',
-    className:
-      cable.status === 'BROKEN'
-        ? 'fiber-cable cable-animated cable-broken cable-animated-broken'
-        : 'fiber-cable cable-animated cable-flow cable-drop cable-drop-green cable-animated-drop-online',
-  }
-}
-
 function formatDateTime(value: string | null) {
   if (!value) return '-'
 
@@ -504,7 +306,6 @@ function formatDateTime(value: string | null) {
     timeStyle: 'medium',
   })
 }
-
 
 function formatOfflineDuration(offlineSince: string | null, nowMs: number) {
   if (!offlineSince || nowMs === 0) return '-'
@@ -526,15 +327,6 @@ function formatOfflineDuration(offlineSince: string | null, nowMs: number) {
 
   return `${seconds} detik`
 }
-
-function getNodeClients(odpNode: NetworkNode, nodes: NetworkNode[]) {
-  if (odpNode.type !== 'ODP') return []
-
-  return nodes
-    .filter((item) => item.type === 'CLIENT' && item.parentId === odpNode.id)
-    .sort((a, b) => a.name.localeCompare(b.name))
-}
-
 
 type NodeExtraFields = NetworkNode & {
   customerName?: string | null
@@ -563,20 +355,19 @@ interface OdpPortCapacityInfo {
   markerColor: string
 }
 
-function getOdpPortCapacityInfo(
+function calculateOdpPortCapacity(
   odpNode: NetworkNode,
-  nodes: NetworkNode[],
+  clientCount: number,
 ): OdpPortCapacityInfo | null {
   if (odpNode.type !== 'ODP') return null
 
   const extraNode = getExtraNode(odpNode)
-  const clients = getNodeClients(odpNode, nodes)
   const capacity =
     typeof extraNode.odpSlotCapacity === 'number' &&
     extraNode.odpSlotCapacity > 0
       ? extraNode.odpSlotCapacity
       : null
-  const used = clients.length
+  const used = clientCount
 
   if (capacity === null) {
     return {
@@ -708,16 +499,6 @@ function matchesManualCableNodeSearch(node: NetworkNode, keyword: string) {
   return searchableText.includes(query)
 }
 
-function getCableEndpointNode(
-  cable: Cable,
-  nodes: NetworkNode[],
-  endpoint: 'from' | 'to',
-) {
-  const nodeId = endpoint === 'from' ? cable.fromNodeId : cable.toNodeId
-
-  return nodes.find((node) => node.id === nodeId) || null
-}
-
 function normalizeCableRouteCoordinates(coordinates: Cable['coordinates']): CableRouteCoordinate[] {
   if (!Array.isArray(coordinates)) return []
 
@@ -733,25 +514,6 @@ function normalizeCableRouteCoordinates(coordinates: Cable['coordinates']): Cabl
       return [latitude, longitude] as CableRouteCoordinate
     })
     .filter((point): point is CableRouteCoordinate => point !== null)
-}
-
-function getCableRouteWithCurrentEndpoints(
-  cable: Cable,
-  nodes: NetworkNode[],
-): CableRouteCoordinate[] {
-  const fromNode = getCableEndpointNode(cable, nodes, 'from')
-  const toNode = getCableEndpointNode(cable, nodes, 'to')
-  const currentCoordinates = normalizeCableRouteCoordinates(cable.coordinates)
-
-  if (!fromNode || !toNode) return currentCoordinates
-
-  const bendPoints = currentCoordinates.length > 2 ? currentCoordinates.slice(1, -1) : []
-
-  return [
-    [fromNode.latitude, fromNode.longitude],
-    ...bendPoints,
-    [toNode.latitude, toNode.longitude],
-  ]
 }
 
 function suggestCableType(
@@ -878,10 +640,12 @@ function NetworkDevicePanel() {
   const [notes, setNotes] = useState('')
   const [isActive, setIsActive] = useState(true)
 
-  const sortedDevices = [...devices].sort((a, b) => {
-    if (a.type !== b.type) return a.type.localeCompare(b.type)
-    return a.name.localeCompare(b.name)
-  })
+  const sortedDevices = useMemo(() => {
+    return [...devices].sort((a, b) => {
+      if (a.type !== b.type) return a.type.localeCompare(b.type)
+      return a.name.localeCompare(b.name)
+    })
+  }, [devices])
 
   const activeCount = devices.filter((device) => device.isActive).length
   const mikrotikCount = devices.filter((device) => device.type === 'MIKROTIK').length
@@ -926,13 +690,13 @@ function NetworkDevicePanel() {
     }
   }, [])
 
-useEffect(() => {
-  const timer = window.setTimeout(() => {
-    void refreshDevices()
-  }, 0)
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void refreshDevices()
+    }, 0)
 
-  return () => window.clearTimeout(timer)
-}, [refreshDevices])
+    return () => window.clearTimeout(timer)
+  }, [refreshDevices])
 
   function handleTypeChange(nextType: NetworkDeviceRecord['type']) {
     setType(nextType)
@@ -1333,7 +1097,6 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [currentTimeMs, setCurrentTimeMs] = useState(() => Date.now())
 
   const [isPickingLocation, setIsPickingLocation] = useState(false)
   const [pickingLocationSource, setPickingLocationSource] =
@@ -1405,25 +1168,62 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
     UNKNOWN: true,
   })
 
-  const manualCableNodeOptions = nodes
-    .filter((node) => ['OLT', 'POLE', 'ODP'].includes(node.type))
-    .sort((a, b) => a.name.localeCompare(b.name))
+  const nodeMap = useMemo(() => {
+    const map = new Map<string, NetworkNode>()
+    for (let i = 0; i < nodes.length; i++) {
+      map.set(nodes[i].id, nodes[i])
+    }
+    return map
+  }, [nodes])
 
-  const filteredCableFromNodeOptions = manualCableNodeOptions.filter((node) =>
-    matchesManualCableNodeSearch(node, cableFromSearch),
-  )
+  const { odpClientsMap, odpCapacityMap } = useMemo(() => {
+    const cMap = new Map<string, NetworkNode[]>()
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i]
+      if (node.type === 'CLIENT' && node.parentId) {
+        const existing = cMap.get(node.parentId) || []
+        existing.push(node)
+        cMap.set(node.parentId, existing)
+      }
+    }
 
-  const filteredCableToNodeOptions = manualCableNodeOptions
-    .filter((node) => node.id !== cableFromNodeId)
-    .filter((node) => matchesManualCableNodeSearch(node, cableToSearch))
+    const capMap = new Map<string, OdpPortCapacityInfo | null>()
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i]
+      if (node.type === 'ODP') {
+        const clients = cMap.get(node.id) || []
+        capMap.set(node.id, calculateOdpPortCapacity(node, clients.length))
+      }
+    }
 
-  const cableFromNode = nodes.find((node) => node.id === cableFromNodeId) || null
-  const cableToNode = nodes.find((node) => node.id === cableToNodeId) || null
+    return { odpClientsMap: cMap, odpCapacityMap: capMap }
+  }, [nodes])
+
+  const manualCableNodeOptions = useMemo(() => {
+    return nodes
+      .filter((node) => ['OLT', 'POLE', 'ODP'].includes(node.type))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [nodes])
+
+  const filteredCableFromNodeOptions = useMemo(() => {
+    return manualCableNodeOptions.filter((node) =>
+      matchesManualCableNodeSearch(node, cableFromSearch),
+    )
+  }, [manualCableNodeOptions, cableFromSearch])
+
+  const filteredCableToNodeOptions = useMemo(() => {
+    return manualCableNodeOptions
+      .filter((node) => node.id !== cableFromNodeId)
+      .filter((node) => matchesManualCableNodeSearch(node, cableToSearch))
+  }, [manualCableNodeOptions, cableFromNodeId, cableToSearch])
+
+  const cableFromNode = nodeMap.get(cableFromNodeId) || null
+  const cableToNode = nodeMap.get(cableToNodeId) || null
 
   function handleCableFromNodeChange(nextFromNodeId: string) {
     setCableFromNodeId(nextFromNodeId)
 
-    const nextFromNode = nodes.find((node) => node.id === nextFromNodeId) || null
+    const nextFromNode = nodeMap.get(nextFromNodeId) || null
     setCableFromSearch(nextFromNode ? nextFromNode.name : '')
 
     if (nextFromNodeId === cableToNodeId) {
@@ -1432,7 +1232,7 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
       return
     }
 
-    const nextToNode = nodes.find((node) => node.id === cableToNodeId) || null
+    const nextToNode = nodeMap.get(cableToNodeId) || null
 
     if (nextFromNode && nextToNode) {
       setCableType(suggestCableType(nextFromNode, nextToNode))
@@ -1442,8 +1242,8 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
   function handleCableToNodeChange(nextToNodeId: string) {
     setCableToNodeId(nextToNodeId)
 
-    const nextFromNode = nodes.find((node) => node.id === cableFromNodeId) || null
-    const nextToNode = nodes.find((node) => node.id === nextToNodeId) || null
+    const nextFromNode = nodeMap.get(cableFromNodeId) || null
+    const nextToNode = nodeMap.get(nextToNodeId) || null
     setCableToSearch(nextToNode ? nextToNode.name : '')
 
     if (nextFromNode && nextToNode) {
@@ -1451,9 +1251,6 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
     }
   }
 
-  // Fallback awal sebelum data node selesai dimuat.
-  // Setelah data masuk, peta diarahkan sekali ke node OLT Balen dari database.
-  // Saat pencarian dihapus, peta tidak dipaksa kembali ke fallback/default.
   const center: [number, number] = [-7.1517, 111.883]
 
   const getFaultAlerts = useCallback(async (): Promise<FaultAlert[]> => {
@@ -1550,16 +1347,6 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
 
     loadInitialData()
   }, [getFaultAlerts])
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setCurrentTimeMs(Date.now())
-    }, 1000)
-
-    return () => {
-      window.clearInterval(timer)
-    }
-  }, [])
 
   useEffect(() => {
     socket.on('connect', () => {
@@ -1985,9 +1772,20 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
     }
   }
 
-
   function handleStartCableRouteEdit(cable: Cable) {
-    const coordinates = getCableRouteWithCurrentEndpoints(cable, nodes)
+    const fromNode = nodeMap.get(cable.fromNodeId)
+    const toNode = nodeMap.get(cable.toNodeId)
+    const currentCoordinates = normalizeCableRouteCoordinates(cable.coordinates)
+
+    let coordinates = currentCoordinates
+    if (fromNode && toNode) {
+      const bendPoints = currentCoordinates.length > 2 ? currentCoordinates.slice(1, -1) : []
+      coordinates = [
+        [fromNode.latitude, fromNode.longitude],
+        ...bendPoints,
+        [toNode.latitude, toNode.longitude],
+      ]
+    }
 
     if (coordinates.length < 2) {
       alert('Kabel belum memiliki titik awal dan akhir yang valid.')
@@ -2043,8 +1841,8 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
   function handleResetCableRouteToStraightLine() {
     if (!editingCableRoute) return
 
-    const fromNode = getCableEndpointNode(editingCableRoute, nodes, 'from')
-    const toNode = getCableEndpointNode(editingCableRoute, nodes, 'to')
+    const fromNode = nodeMap.get(editingCableRoute.fromNodeId)
+    const toNode = nodeMap.get(editingCableRoute.toNodeId)
 
     if (!fromNode || !toNode) {
       alert('Node asal atau tujuan kabel tidak ditemukan.')
@@ -2288,80 +2086,112 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
     }
   }
 
-  const filteredNodes = nodes.filter(
-    (node) => visibleNodeTypes[node.type] && visibleStatuses[node.status],
-  )
+  const filteredNodes = useMemo(() => {
+    return nodes.filter(
+      (node) => visibleNodeTypes[node.type] && visibleStatuses[node.status],
+    )
+  }, [nodes, visibleNodeTypes, visibleStatuses])
 
-  const filteredCables = cables.filter(
-    (cable) => visibleCableTypes[cable.type],
+  const offlineNodes = useMemo(
+    () => nodes.filter((node) => node.status === 'OFFLINE'),
+    [nodes],
   )
-
-  const offlineNodes = nodes.filter((node) => node.status === 'OFFLINE')
 
   const selectedFaultNode = selectedFaultAlert?.suspectedNodeId
-    ? nodes.find((node) => node.id === selectedFaultAlert.suspectedNodeId) ||
-      null
+    ? nodeMap.get(selectedFaultAlert.suspectedNodeId) || null
     : null
 
-  // Fokus peta hanya mengikuti hasil pencarian atau fault analysis.
-  // Jika pencarian dihapus, peta tetap diam di posisi terakhir user.
   const focusedNode = selectedSearchNode || selectedFaultNode
-  const defaultMapNode =
-    nodes.find(
-      (node) =>
-        node.type === 'OLT' &&
-        normalizeNodeSearchText(node.name).includes('balen'),
-    ) ||
-    nodes.find((node) => node.type === 'OLT') ||
-    nodes.find((node) => normalizeNodeSearchText(node.name).includes('olt')) ||
-    null
+  const defaultMapNode = useMemo(() => {
+    return (
+      nodes.find(
+        (node) =>
+          node.type === 'OLT' &&
+          normalizeNodeSearchText(node.name).includes('balen'),
+      ) ||
+      nodes.find((node) => node.type === 'OLT') ||
+      nodes.find((node) => normalizeNodeSearchText(node.name).includes('olt')) ||
+      null
+    )
+  }, [nodes])
 
   const normalizedSearchKeyword = searchKeyword.trim().toLowerCase()
 
-  const searchResults =
-    normalizedSearchKeyword.length >= 2
-      ? nodes
-          .filter((node) => {
-            const searchableText = [
-              node.name,
-              node.id,
-              node.type,
-              node.status,
-              node.ipAddress || '',
-              node.pppoeUsername || '',
-            ]
-              .join(' ')
-              .toLowerCase()
+  const searchResults = useMemo(() => {
+    if (normalizedSearchKeyword.length < 2) return []
 
-            return searchableText.includes(normalizedSearchKeyword)
-          })
-          .slice(0, 20)
-      : []
+    return nodes
+      .filter((node) => {
+        const searchableText = [
+          node.name,
+          node.id,
+          node.type,
+          node.status,
+          node.ipAddress || '',
+          node.pppoeUsername || '',
+        ]
+          .join(' ')
+          .toLowerCase()
 
-  const totalNodes = nodes.length
-  const totalCables = cables.length
-  const totalClients = nodes.filter((node) => node.type === 'CLIENT').length
-  const onlineClients = nodes.filter(
-    (node) => node.type === 'CLIENT' && node.status === 'ONLINE',
-  ).length
-  const offlineClients = nodes.filter(
-    (node) => node.type === 'CLIENT' && node.status === 'OFFLINE',
-  ).length
-  const warningClients = nodes.filter(
-    (node) => node.type === 'CLIENT' && node.status === 'WARNING',
-  ).length
-  const unknownClients = nodes.filter(
-    (node) => node.type === 'CLIENT' && node.status === 'UNKNOWN',
-  ).length
-  const totalOdps = nodes.filter((node) => node.type === 'ODP').length
-  const totalOlts = nodes.filter((node) => node.type === 'OLT').length
-  const totalPoles = nodes.filter((node) => node.type === 'POLE').length
-  const totalRouters = nodes.filter((node) => node.type === 'ROUTER').length
-  const normalCables = cables.filter((cable) => cable.status === 'NORMAL').length
-  const brokenCables = cables.filter((cable) => cable.status === 'BROKEN').length
-  const affectedCables = cables.filter(
-    (cable) => cable.status === 'AFFECTED',
-  ).length
+        return searchableText.includes(normalizedSearchKeyword)
+      })
+      .slice(0, 20)
+  }, [nodes, normalizedSearchKeyword])
+
+  const stats = useMemo(() => {
+    const totalNodes = nodes.length
+    const totalCables = cables.length
+    let totalClients = 0
+    let onlineClients = 0
+    let offlineClients = 0
+    let warningClients = 0
+    let unknownClients = 0
+    let totalOdps = 0
+    let totalOlts = 0
+    let totalPoles = 0
+    let totalRouters = 0
+
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i]
+      if (n.type === 'CLIENT') {
+        totalClients++
+        if (n.status === 'ONLINE') onlineClients++
+        else if (n.status === 'OFFLINE') offlineClients++
+        else if (n.status === 'WARNING') warningClients++
+        else unknownClients++
+      } else if (n.type === 'ODP') totalOdps++
+      else if (n.type === 'OLT') totalOlts++
+      else if (n.type === 'POLE') totalPoles++
+      else if (n.type === 'ROUTER') totalRouters++
+    }
+
+    let normalCables = 0
+    let brokenCables = 0
+    let affectedCables = 0
+    for (let i = 0; i < cables.length; i++) {
+      const c = cables[i]
+      if (c.status === 'NORMAL') normalCables++
+      else if (c.status === 'BROKEN') brokenCables++
+      else if (c.status === 'AFFECTED') affectedCables++
+    }
+
+    return {
+      totalNodes,
+      totalCables,
+      totalClients,
+      onlineClients,
+      offlineClients,
+      warningClients,
+      unknownClients,
+      totalOdps,
+      totalOlts,
+      totalPoles,
+      totalRouters,
+      normalCables,
+      brokenCables,
+      affectedCables,
+    }
+  }, [nodes, cables])
 
   if (loading) {
     return <div className="loading-page">Memuat data peta...</div>
@@ -2369,6 +2199,254 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
 
   if (error) {
     return <div className="error-page">{error}</div>
+  }
+
+  const renderNodeMarker = (node: NetworkNode) => {
+    const capacityInfo = odpCapacityMap.get(node.id) || null
+    const isHighlighted =
+      selectedFaultAlert?.suspectedNodeId === node.id ||
+      selectedSearchNode?.id === node.id
+
+    return (
+      <Marker
+        key={node.id}
+        position={[node.latitude, node.longitude]}
+        icon={createMarkerIcon(node, isHighlighted, capacityInfo)}
+        draggable={effectiveEditLocationMode}
+        eventHandlers={
+          effectiveEditLocationMode
+            ? {
+                dragend: (event) => handleMarkerDragEnd(node.id, event),
+              }
+            : undefined
+        }
+      >
+        <Popup>
+          <div className="marker-popup marker-popup-compact">
+            <div className="popup-title-row">
+              <strong>{node.name}</strong>
+              <span className={`node-status-pill status-${node.status.toLowerCase()}`}>
+                {node.status}
+              </span>
+            </div>
+
+            <div className="popup-subtitle">
+              {node.type} • {node.id}
+            </div>
+
+            {(node.type === 'CLIENT' || node.type === 'ROUTER') && (() => {
+              const extraNode = getExtraNode(node)
+              const parentNode = node.parentId
+                ? nodeMap.get(node.parentId) || null
+                : null
+
+              return (
+                <>
+                  <div className="popup-row">
+                    <span>Nama</span>
+                    <b>{getClientDisplayName(node)}</b>
+                  </div>
+
+                  <div className="popup-row">
+                    <span>No WA</span>
+                    <b>{extraNode.customerPhone || '-'}</b>
+                  </div>
+
+                  <div className="popup-row">
+                    <span>Alamat</span>
+                    <b className="popup-long-text">
+                      {extraNode.customerAddress || '-'}
+                    </b>
+                  </div>
+
+                  <div className="popup-row">
+                    <span>PPPoE</span>
+                    <b>{node.pppoeUsername || '-'}</b>
+                  </div>
+
+                  <div className="popup-row">
+                    <span>ODP</span>
+                    <b>{parentNode ? parentNode.name : '-'}</b>
+                  </div>
+
+                  <div className="popup-row">
+                    <span>IP</span>
+                    <b>{node.ipAddress || '-'}</b>
+                  </div>
+
+                  <div className="popup-row">
+                    <span>RX / Latency</span>
+                    <b>{formatSignalValue(node)} • {formatLatencyValue(node.latencyMs)}</b>
+                  </div>
+
+                  <div className="popup-row">
+                    <span>Koordinat</span>
+                    <a
+                      className="popup-map-link"
+                      href={`https://maps.google.com/?q=${node.latitude},${node.longitude}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Buka Maps
+                    </a>
+                  </div>
+
+                  {node.status === 'OFFLINE' && (
+                    <div className="popup-row popup-row-danger">
+                      <span>Offline</span>
+                      <OfflineDurationDisplay offlineSince={node.offlineSince} />
+                    </div>
+                  )}
+                </>
+              )
+            })()}
+
+            {node.type === 'ODP' && (() => {
+              const clients = odpClientsMap.get(node.id) || []
+              const onlineClientsList = clients.filter(
+                (client) => client.status === 'ONLINE',
+              )
+              const offlineClientsList = clients.filter(
+                (client) => client.status === 'OFFLINE',
+              )
+              const warningClientsList = clients.filter(
+                (client) => client.status === 'WARNING',
+              )
+              const odpCapacity = capacityInfo?.capacity ?? null
+              const usedSlots = capacityInfo?.used ?? clients.length
+              const remainingSlots = capacityInfo?.remaining ?? null
+              const usagePercent = capacityInfo?.usagePercent ?? 0
+              const capacityState = capacityInfo?.state ?? 'unknown'
+              const capacityLabel =
+                capacityInfo?.label ?? 'Kapasitas belum diatur'
+
+              return (
+                <div className="odp-client-box odp-client-box-compact">
+                  <div className="odp-capacity-grid">
+                    <div>
+                      <span>Kapasitas</span>
+                      <b>{odpCapacity === null ? 'Belum diatur' : `${odpCapacity} slot`}</b>
+                    </div>
+
+                    <div>
+                      <span>Terpakai</span>
+                      <b>{usedSlots}</b>
+                    </div>
+
+                    <div>
+                      <span>Sisa</span>
+                      <b>{remainingSlots === null ? '-' : remainingSlots}</b>
+                    </div>
+                  </div>
+
+                  <div className={`odp-port-status odp-port-status-${capacityState}`}>
+                    {capacityLabel}
+                  </div>
+
+                  {odpCapacity !== null && (
+                    <div className={`odp-capacity-bar odp-capacity-bar-${capacityState}`}>
+                      <span style={{ width: `${usagePercent}%` }} />
+                    </div>
+                  )}
+
+                  <div className="odp-client-summary-text">
+                    Client: {clients.length} • Online: {onlineClientsList.length} • Offline:{' '}
+                    {offlineClientsList.length} • Warning: {warningClientsList.length}
+                  </div>
+
+                  {clients.length === 0 && (
+                    <p className="odp-empty-client">
+                      Belum ada client yang terhubung ke ODP ini.
+                    </p>
+                  )}
+
+                  {clients.length > 0 && (
+                    <div className="odp-client-list odp-client-list-compact">
+                      {clients.slice(0, 8).map((client) => {
+                        const clientExtra = getExtraNode(client)
+
+                        return (
+                          <button
+                            type="button"
+                            className={`odp-client-item client-${client.status.toLowerCase()}`}
+                            key={client.id}
+                            onClick={() => {
+                              setSelectedSearchNode(client)
+                              setSelectedFaultAlert(null)
+                            }}
+                          >
+                            <span className="odp-client-name">
+                              {getClientDisplayName(client)}
+                            </span>
+                            <span className="odp-client-meta">
+                              {client.status} • {client.pppoeUsername || clientExtra.customerPhone || '-'}
+                            </span>
+                          </button>
+                        )
+                      })}
+
+                      {clients.length > 8 && (
+                        <small className="odp-client-more">
+                          +{clients.length - 8} client lainnya
+                        </small>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
+
+            {node.type !== 'CLIENT' &&
+              node.type !== 'ROUTER' &&
+              node.type !== 'ODP' && (
+                <div className="popup-row">
+                  <span>Status</span>
+                  <b>{node.status}</b>
+                </div>
+              )}
+
+            <small>
+              {canEditNetwork
+                ? effectiveEditLocationMode
+                  ? 'Geser marker untuk mengubah posisi.'
+                  : 'Aktifkan Mode Edit Lokasi untuk menggeser marker.'
+                : 'Akun VIEW hanya bisa melihat data.'}
+            </small>
+
+            {((node.type === 'CLIENT' || node.type === 'ROUTER')
+              ? canEditNetwork
+              : isAdmin) && (
+              <button
+                type="button"
+                className="edit-node-button"
+                onClick={() => {
+                  if (node.type === 'CLIENT' || node.type === 'ROUTER') {
+                    setEditingClient(node)
+                    return
+                  }
+
+                  setEditingNode(node)
+                }}
+              >
+                {node.type === 'CLIENT' || node.type === 'ROUTER'
+                  ? 'Edit Client'
+                  : 'Edit Node'}
+              </button>
+            )}
+
+            {canDeleteNetwork && (
+              <button
+                type="button"
+                className="delete-node-button"
+                onClick={() => handleDeleteNode(node.id)}
+              >
+                Hapus Node
+              </button>
+            )}
+          </div>
+        </Popup>
+      </Marker>
+    )
   }
 
   return (
@@ -2631,7 +2709,7 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
                       </span>
                       <span>
                         Durasi:{' '}
-                        {formatOfflineDuration(node.offlineSince, currentTimeMs)}
+                        <OfflineDurationDisplay offlineSince={node.offlineSince} />
                       </span>
                     </div>
                   ))}
@@ -2764,77 +2842,78 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
                 </div>
               </div>
             )}
+
             {activePanel === 'stats' && (
               <div className="sidebar-section">
                 <div className="stats-grid">
                   <div className="stat-card">
                     <span>Total Node</span>
-                    <strong>{totalNodes}</strong>
+                    <strong>{stats.totalNodes}</strong>
                   </div>
 
                   <div className="stat-card">
                     <span>Total Kabel</span>
-                    <strong>{totalCables}</strong>
+                    <strong>{stats.totalCables}</strong>
                   </div>
 
                   <div className="stat-card">
                     <span>Total Client</span>
-                    <strong>{totalClients}</strong>
+                    <strong>{stats.totalClients}</strong>
                   </div>
 
                   <div className="stat-card">
                     <span>Client Online</span>
-                    <strong>{onlineClients}</strong>
+                    <strong>{stats.onlineClients}</strong>
                   </div>
 
                   <div className="stat-card">
                     <span>Client Offline</span>
-                    <strong>{offlineClients}</strong>
+                    <strong>{stats.offlineClients}</strong>
                   </div>
 
                   <div className="stat-card">
                     <span>Client Warning</span>
-                    <strong>{warningClients}</strong>
+                    <strong>{stats.warningClients}</strong>
                   </div>
 
                   <div className="stat-card">
                     <span>Client Unknown</span>
-                    <strong>{unknownClients}</strong>
+                    <strong>{stats.unknownClients}</strong>
                   </div>
 
                   <div className="stat-card">
                     <span>ODP</span>
-                    <strong>{totalOdps}</strong>
+                    <strong>{stats.totalOdps}</strong>
                   </div>
 
                   <div className="stat-card">
                     <span>OLT</span>
-                    <strong>{totalOlts}</strong>
+                    <strong>{stats.totalOlts}</strong>
                   </div>
 
                   <div className="stat-card">
                     <span>Tiang</span>
-                    <strong>{totalPoles}</strong>
+                    <strong>{stats.totalPoles}</strong>
                   </div>
 
                   <div className="stat-card">
                     <span>Router</span>
-                    <strong>{totalRouters}</strong>
+                    <strong>{stats.totalRouters}</strong>
                   </div>
 
                   <div className="stat-card">
                     <span>Kabel Normal</span>
-                    <strong>{normalCables}</strong>
+                    <strong>{stats.normalCables}</strong>
                   </div>
 
                   <div className="stat-card">
                     <span>Kabel Terdampak</span>
-                    <strong>{affectedCables}</strong>
+                    <strong>{stats.affectedCables}</strong>
                   </div>
 
                   <div className="stat-card">
                     <span>Kabel Putus</span>
-                    <strong>{brokenCables}</strong>
+                    <strong>{stats.brokenCables}</strong>
                   </div>
                 </div>
               </div>
@@ -2842,7 +2921,6 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
           </div>
         </div>
       )}
-
 
       {isAddNodeModalOpen && (
         <div
@@ -2876,9 +2954,7 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
               longitude={formLongitude}
               coordinateMessage={coordinateMessage}
               isPickingLocation={isPickingLocation}
-              parentOptions={nodes.filter((node) =>
-                ['OLT', 'POLE', 'ODP'].includes(node.type),
-              )}
+              parentOptions={manualCableNodeOptions}
               onLatitudeChange={handleFormLatitudeChange}
               onLongitudeChange={handleFormLongitudeChange}
               onTogglePickingLocation={() => handleTogglePickingLocation('node')}
@@ -2891,7 +2967,6 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
           </div>
         </div>
       )}
-
 
       {isAddClientModalOpen && (
         <div
@@ -2939,7 +3014,6 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
           </div>
         </div>
       )}
-
 
       {editingClient && (
         <div className="app-modal-backdrop">
@@ -2991,9 +3065,7 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
             <EditNodeForm
               key={editingNode.id}
               node={editingNode}
-              parentOptions={nodes.filter((node) =>
-                ['OLT', 'POLE', 'ODP'].includes(node.type),
-              )}
+              parentOptions={manualCableNodeOptions}
               onClose={() => setEditingNode(null)}
               onSuccess={handleEditNodeSuccess}
             />
@@ -3189,10 +3261,10 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
 
       <div className="map-container">
         <div className="server-mini-card">
-          <span>● NODE <b>{totalNodes}</b></span>
-          <span>● ONLINE <b>{onlineClients}</b></span>
-          <span>● OFFLINE <b>{offlineClients}</b></span>
-          <span>● ODP <b>{totalOdps}</b></span>
+          <span>● NODE <b>{stats.totalNodes}</b></span>
+          <span>● ONLINE <b>{stats.onlineClients}</b></span>
+          <span>● OFFLINE <b>{stats.offlineClients}</b></span>
+          <span>● ODP <b>{stats.totalOdps}</b></span>
         </div>
 
         {isPickingLocation && (
@@ -3212,7 +3284,6 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
           <div className="current-user-badge">
             {currentUser.name} • {currentUser.role} • {currentUser.access}
           </div>
-
 
           <button
             type="button"
@@ -3374,6 +3445,7 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
           zoom={17}
           maxZoom={22}
           minZoom={5}
+          preferCanvas={true}
           style={{ height: '100%', width: '100%' }}
         >
           <MapClickHandler
@@ -3410,320 +3482,34 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
             />
           )}
 
-          {filteredCables.map((cable) => {
-            const cableVisualStatus = getCableVisualStatus(cable, nodes)
-            const isCableHighlighted = selectedFaultAlert?.suspectedCableId === cable.id
-            const isEditingThisCable = editingCableRoute?.id === cable.id
-            const cablePositions = isEditingThisCable
-              ? editingCableRouteCoordinates
-              : normalizeCableRouteCoordinates(cable.coordinates)
+          {/* Layer Kabel Efisien (Leaflet Native LayerGroup) */}
+          <CableLayer
+            cables={cables}
+            nodeMap={nodeMap}
+            visibleCableTypes={visibleCableTypes}
+            selectedFaultAlertCableId={selectedFaultAlert?.suspectedCableId}
+            cableAnimationEnabled={cableAnimationEnabled}
+            isAdmin={isAdmin}
+            onEditRoute={handleStartCableRouteEdit}
+            onDeleteCable={handleDeleteCable}
+          />
 
-            return (
-              <Polyline
-                key={`${cable.id}-${cableVisualStatus}-${cable.status}-${cableAnimationEnabled ? 'anim-on' : 'anim-off'}-${isEditingThisCable ? editingCableRouteCoordinates.length : 'saved'}`}
-                positions={cablePositions}
-                pathOptions={getCableStyle(
-                  cable,
-                  isCableHighlighted || isEditingThisCable,
-                  nodes,
-                  cableAnimationEnabled,
-                )}
-              >
-                <Popup>
-                  <div className="cable-popup">
-                    <strong>{cable.name}</strong>
+          {/* Garis Preview saat Admin Mengedit Jalur Kabel */}
+          {editingCableRoute && (
+            <Polyline
+              positions={editingCableRouteCoordinates}
+              pathOptions={{ color: '#0ea5e9', weight: 6, dashArray: '8 8' }}
+            />
+          )}
 
-                    <div className="popup-row">
-                      <span>Tipe</span>
-                      <b>{getCableTypeLabel(cable.type)}</b>
-                    </div>
-
-                    <div className="popup-row">
-                      <span>Status</span>
-                      <b>{cable.type === 'DROP_WIRE' ? cableVisualStatus : getCableStatusLabel(cable.status)}</b>
-                    </div>
-
-                    <div className="popup-row">
-                      <span>Dari</span>
-                      <b>{getCableEndpointNode(cable, nodes, 'from')?.name || cable.fromNodeId}</b>
-                    </div>
-
-                    <div className="popup-row">
-                      <span>Ke</span>
-                      <b>{getCableEndpointNode(cable, nodes, 'to')?.name || cable.toNodeId}</b>
-                    </div>
-
-                    {isAdmin && (
-                      <>
-                        <button
-                          type="button"
-                          className="edit-node-button"
-                          onClick={() => handleStartCableRouteEdit(cable)}
-                        >
-                          Edit Jalur
-                        </button>
-
-                        <button
-                          type="button"
-                          className="delete-node-button"
-                          onClick={() => handleDeleteCable(cable.id)}
-                        >
-                          Hapus Kabel
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </Popup>
-              </Polyline>
-            )
-          })}
-
-          {filteredNodes.map((node) => (
-            <Marker
-              key={node.id}
-              position={[node.latitude, node.longitude]}
-              icon={createMarkerIcon(
-                node,
-                selectedFaultAlert?.suspectedNodeId === node.id ||
-                  selectedSearchNode?.id === node.id,
-                nodes,
-              )}
-              draggable={effectiveEditLocationMode}
-              eventHandlers={
-                effectiveEditLocationMode
-                  ? {
-                      dragend: (event) => handleMarkerDragEnd(node.id, event),
-                    }
-                  : undefined
-              }
-            >
-              <Popup>
-                <div className="marker-popup marker-popup-compact">
-                  <div className="popup-title-row">
-                    <strong>{node.name}</strong>
-                    <span className={`node-status-pill status-${node.status.toLowerCase()}`}>
-                      {node.status}
-                    </span>
-                  </div>
-
-                  <div className="popup-subtitle">
-                    {node.type} • {node.id}
-                  </div>
-
-                  {(node.type === 'CLIENT' || node.type === 'ROUTER') && (() => {
-                    const extraNode = getExtraNode(node)
-                    const parentNode = node.parentId
-                      ? nodes.find((item) => item.id === node.parentId) || null
-                      : null
-
-                    return (
-                      <>
-                        <div className="popup-row">
-                          <span>Nama</span>
-                          <b>{getClientDisplayName(node)}</b>
-                        </div>
-
-                        <div className="popup-row">
-                          <span>No WA</span>
-                          <b>{extraNode.customerPhone || '-'}</b>
-                        </div>
-
-                        <div className="popup-row">
-                          <span>Alamat</span>
-                          <b className="popup-long-text">
-                            {extraNode.customerAddress || '-'}
-                          </b>
-                        </div>
-
-                        <div className="popup-row">
-                          <span>PPPoE</span>
-                          <b>{node.pppoeUsername || '-'}</b>
-                        </div>
-
-                        <div className="popup-row">
-                          <span>ODP</span>
-                          <b>{parentNode ? parentNode.name : '-'}</b>
-                        </div>
-
-                        <div className="popup-row">
-                          <span>IP</span>
-                          <b>{node.ipAddress || '-'}</b>
-                        </div>
-
-                        <div className="popup-row">
-                          <span>RX / Latency</span>
-                          <b>{formatSignalValue(node)} • {formatLatencyValue(node.latencyMs)}</b>
-                        </div>
-
-                        <div className="popup-row">
-                          <span>Koordinat</span>
-                          <a
-                            className="popup-map-link"
-                            href={`https://maps.google.com/?q=${node.latitude},${node.longitude}`}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Buka Maps
-                          </a>
-                        </div>
-
-                        {node.status === 'OFFLINE' && (
-                          <div className="popup-row popup-row-danger">
-                            <span>Offline</span>
-                            <b>{formatOfflineDuration(node.offlineSince, currentTimeMs)}</b>
-                          </div>
-                        )}
-                      </>
-                    )
-                  })()}
-
-                  {node.type === 'ODP' && (() => {
-                    const clients = getNodeClients(node, nodes)
-                    const onlineClients = clients.filter(
-                      (client) => client.status === 'ONLINE',
-                    )
-                    const offlineClients = clients.filter(
-                      (client) => client.status === 'OFFLINE',
-                    )
-                    const warningClients = clients.filter(
-                      (client) => client.status === 'WARNING',
-                    )
-                    const capacityInfo = getOdpPortCapacityInfo(node, nodes)
-                    const odpCapacity = capacityInfo?.capacity ?? null
-                    const usedSlots = capacityInfo?.used ?? clients.length
-                    const remainingSlots = capacityInfo?.remaining ?? null
-                    const usagePercent = capacityInfo?.usagePercent ?? 0
-                    const capacityState = capacityInfo?.state ?? 'unknown'
-                    const capacityLabel =
-                      capacityInfo?.label ?? 'Kapasitas belum diatur'
-
-                    return (
-                      <div className="odp-client-box odp-client-box-compact">
-                        <div className="odp-capacity-grid">
-                          <div>
-                            <span>Kapasitas</span>
-                            <b>{odpCapacity === null ? 'Belum diatur' : `${odpCapacity} slot`}</b>
-                          </div>
-
-                          <div>
-                            <span>Terpakai</span>
-                            <b>{usedSlots}</b>
-                          </div>
-
-                          <div>
-                            <span>Sisa</span>
-                            <b>{remainingSlots === null ? '-' : remainingSlots}</b>
-                          </div>
-                        </div>
-
-                        <div className={`odp-port-status odp-port-status-${capacityState}`}>
-                          {capacityLabel}
-                        </div>
-
-                        {odpCapacity !== null && (
-                          <div className={`odp-capacity-bar odp-capacity-bar-${capacityState}`}>
-                            <span style={{ width: `${usagePercent}%` }} />
-                          </div>
-                        )}
-
-                        <div className="odp-client-summary-text">
-                          Client: {clients.length} • Online: {onlineClients.length} • Offline:{' '}
-                          {offlineClients.length} • Warning: {warningClients.length}
-                        </div>
-
-                        {clients.length === 0 && (
-                          <p className="odp-empty-client">
-                            Belum ada client yang terhubung ke ODP ini.
-                          </p>
-                        )}
-
-                        {clients.length > 0 && (
-                          <div className="odp-client-list odp-client-list-compact">
-                            {clients.slice(0, 8).map((client) => {
-                              const clientExtra = getExtraNode(client)
-
-                              return (
-                                <button
-                                  type="button"
-                                  className={`odp-client-item client-${client.status.toLowerCase()}`}
-                                  key={client.id}
-                                  onClick={() => {
-                                    setSelectedSearchNode(client)
-                                    setSelectedFaultAlert(null)
-                                  }}
-                                >
-                                  <span className="odp-client-name">
-                                    {getClientDisplayName(client)}
-                                  </span>
-                                  <span className="odp-client-meta">
-                                    {client.status} • {client.pppoeUsername || clientExtra.customerPhone || '-'}
-                                  </span>
-                                </button>
-                              )
-                            })}
-
-                            {clients.length > 8 && (
-                              <small className="odp-client-more">
-                                +{clients.length - 8} client lainnya
-                              </small>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })()}
-
-                  {node.type !== 'CLIENT' &&
-                    node.type !== 'ROUTER' &&
-                    node.type !== 'ODP' && (
-                      <div className="popup-row">
-                        <span>Status</span>
-                        <b>{node.status}</b>
-                      </div>
-                    )}
-
-                  <small>
-                    {canEditNetwork
-                      ? effectiveEditLocationMode
-                        ? 'Geser marker untuk mengubah posisi.'
-                        : 'Aktifkan Mode Edit Lokasi untuk menggeser marker.'
-                      : 'Akun VIEW hanya bisa melihat data.'}
-                  </small>
-
-                  {((node.type === 'CLIENT' || node.type === 'ROUTER')
-                    ? canEditNetwork
-                    : isAdmin) && (
-                    <button
-                      type="button"
-                      className="edit-node-button"
-                      onClick={() => {
-                        if (node.type === 'CLIENT' || node.type === 'ROUTER') {
-                          setEditingClient(node)
-                          return
-                        }
-
-                        setEditingNode(node)
-                      }}
-                    >
-                      {node.type === 'CLIENT' || node.type === 'ROUTER'
-                        ? 'Edit Client'
-                        : 'Edit Node'}
-                    </button>
-                  )}
-
-                  {canDeleteNetwork && (
-                    <button
-                      type="button"
-                      className="delete-node-button"
-                      onClick={() => handleDeleteNode(node.id)}
-                    >
-                      Hapus Node
-                    </button>
-                  )}
-                </div>
-              </Popup>
-            </Marker>
-          ))}
+          <MarkerClusterGroup
+            chunkedLoading={true}
+            maxClusterRadius={80}
+            disableClusteringAtZoom={19}
+            spiderfyOnMaxZoom={true}
+          >
+            {filteredNodes.map(renderNodeMarker)}
+          </MarkerClusterGroup>
 
           {selectedCoordinate && (
             <Marker
@@ -3752,4 +3538,4 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
       </div>
     </div>
   )
-}
+} 
