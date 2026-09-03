@@ -881,7 +881,7 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
       const errMessage = error instanceof Error ? error.message : String(error)
       alert(errMessage || 'Gagal menyimpan perangkat')
       throw error
-}
+    }
   }
 
   const showStatusNotification = useCallback((node: NetworkNode) => {
