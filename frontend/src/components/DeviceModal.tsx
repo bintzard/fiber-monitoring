@@ -7,9 +7,11 @@ export interface Device {
   host: string;
   port: number;
   username?: string;
-  lastCheckStatus?: string;
-  lastCheckMessage?: string;
-  lastCheckAt?: string;
+  brand?: string | null;
+  model?: string | null;
+  connectionStatus?: string;
+  notes?: string | null;
+  isActive?: boolean;
 }
 
 interface DeviceModalProps {
@@ -20,12 +22,17 @@ interface DeviceModalProps {
   onTestDevice: (id: number) => Promise<void>;
   onDeleteDevice: (id: number) => Promise<void>;
   onSaveDevice: (data: {
+    id?: number;
     name: string;
     type: string;
     host: string;
     port: number;
     username?: string;
     password?: string;
+    brand?: string;
+    model?: string;
+    notes?: string;
+    isActive?: boolean;
   }) => Promise<void>;
 }
 
@@ -38,20 +45,68 @@ export const DeviceModal: React.FC<DeviceModalProps> = ({
   onDeleteDevice,
   onSaveDevice,
 }) => {
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [name, setName] = useState('');
-  const [type, setType] = useState<'OLT_ZTE' | 'MIKROTIK'>('OLT_ZTE');
+  const [type, setType] = useState<'OLT' | 'MIKROTIK'>('OLT');
   const [host, setHost] = useState('');
-  const [port, setPort] = useState<number>(161);
+  const [port, setPort] = useState('161');
   const [username, setUsername] = useState('');
-  const [communityOrPass, setCommunityOrPass] = useState('');
-  const [testingId, setTestingId] = useState<number | null>(null);
+  const [password, setPassword] = useState('');
+  const [brand, setBrand] = useState('ZTE');
+  const [model, setModel] = useState('C320');
+  const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [testingId, setTestingId] = useState<number | null>(null);
+
+  // State untuk Notifikasi Kustom (Pengganti alert())
+  const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   if (!isOpen) return null;
 
-  const handleTypeChange = (selectedType: 'OLT_ZTE' | 'MIKROTIK') => {
-    setType(selectedType);
-    setPort(selectedType === 'OLT_ZTE' ? 161 : 8728);
+  const showToast = (message: string, type: 'success' | 'error') => {
+    setNotification({ message, type });
+    setTimeout(() => setNotification(null), 4000); // Hilang otomatis dalam 4 detik
+  };
+
+  const handleTypeChange = (nextType: 'OLT' | 'MIKROTIK') => {
+    setType(nextType);
+    setPort(nextType === 'OLT' ? '161' : '8728');
+    if (nextType === 'MIKROTIK') {
+      setUsername('admin');
+      setBrand('MikroTik');
+      setModel('RouterOS');
+    } else {
+      setUsername('snmp');
+      setBrand('ZTE');
+      setModel('C320');
+    }
+  };
+
+  const handleStartEdit = (d: Device) => {
+    setEditingId(d.id);
+    setName(d.name);
+    const normalizedType = d.type.includes('OLT') ? 'OLT' : 'MIKROTIK';
+    setType(normalizedType);
+    setHost(d.host);
+    setPort(String(d.port));
+    setUsername(d.username || (normalizedType === 'OLT' ? 'snmp' : 'admin'));
+    setPassword('');
+    setBrand(d.brand || (normalizedType === 'OLT' ? 'ZTE' : 'MikroTik'));
+    setModel(d.model || (normalizedType === 'OLT' ? 'C320' : 'RouterOS'));
+    setNotes(d.notes || '');
+  };
+
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setName('');
+    setType('OLT');
+    setHost('');
+    setPort('161');
+    setUsername('');
+    setPassword('');
+    setBrand('ZTE');
+    setModel('C320');
+    setNotes('');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -59,18 +114,22 @@ export const DeviceModal: React.FC<DeviceModalProps> = ({
     setSubmitting(true);
     try {
       await onSaveDevice({
-        name,
+        id: editingId !== null ? editingId : undefined,
+        name: name.trim(),
         type,
-        host,
+        host: host.trim(),
         port: Number(port),
-        username: type === 'MIKROTIK' ? username : undefined,
-        password: communityOrPass,
+        username: username.trim(),
+        password: password.trim() || undefined,
+        brand: brand.trim(),
+        model: model.trim(),
+        notes: notes.trim(),
       });
-      // Reset Form
-      setName('');
-      setHost('');
-      setUsername('');
-      setCommunityOrPass('');
+      showToast(editingId !== null ? 'Perubahan perangkat berhasil disimpan.' : 'Perangkat baru berhasil ditambahkan.', 'success');
+      handleCancelEdit();
+    } catch (err: unknown) {
+      const errMessage = err instanceof Error ? err.message : String(err);
+      showToast(errMessage || 'Gagal menyimpan perangkat.', 'error');
     } finally {
       setSubmitting(false);
     }
@@ -80,190 +139,250 @@ export const DeviceModal: React.FC<DeviceModalProps> = ({
     setTestingId(id);
     try {
       await onTestDevice(id);
+      showToast('Test koneksi perangkat berhasil.', 'success');
+    } catch (err: unknown) {
+      const errMessage = err instanceof Error ? err.message : String(err);
+      showToast(errMessage || 'Gagal terhubung ke perangkat.', 'error');
     } finally {
       setTestingId(null);
     }
   };
 
+  const handleDelete = async (id: number) => {
+    const confirmed = window.confirm('Yakin ingin menghapus perangkat monitoring ini?');
+    if (!confirmed) return;
+
+    try {
+      await onDeleteDevice(id);
+      showToast('Perangkat berhasil dihapus.', 'success');
+    } catch (err: unknown) {
+      const errMessage = err instanceof Error ? err.message : String(err);
+      showToast(errMessage || 'Gagal menghapus perangkat.', 'error');
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-      <div className="w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-2xl bg-[#0f172a] border border-slate-700 p-6 text-slate-100 shadow-2xl">
+    <div className="app-modal-backdrop">
+      <div className="app-modal app-modal-form" style={{ maxWidth: '900px', width: '95%' }}>
         {/* Header Modal */}
-        <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+        <div className="app-modal-header">
           <div>
-            <h2 className="text-xl font-bold text-white">Device Management</h2>
-            <p className="text-xs text-slate-400">Kelola gateway OLT (SNMP) dan MikroTik Router</p>
+            <h2>Device Management</h2>
+            <p>Kelola gateway OLT (SNMP) dan MikroTik Router secara terpusat.</p>
           </div>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center font-bold"
-          >
-            ✕
+          <button type="button" className="app-modal-close" onClick={onClose}>
+            ×
           </button>
         </div>
 
-        {/* Form Tambah Device */}
-        <form onSubmit={handleSubmit} className="mt-4 p-4 rounded-xl bg-slate-900/90 border border-slate-800 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-          <div>
-            <label className="text-slate-400 font-medium">Nama Perangkat</label>
-            <input
-              required
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Contoh: OLT-Balen"
-              className="w-full mt-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg focus:border-blue-500 outline-none text-white"
-            />
-          </div>
-
-          <div>
-            <label className="text-slate-400 font-medium">Tipe Perangkat</label>
-            <select
-              value={type}
-              onChange={(e) => handleTypeChange(e.target.value as 'OLT_ZTE' | 'MIKROTIK')}
-              className="w-full mt-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg outline-none text-white"
-            >
-              <option value="OLT_ZTE">OLT ZTE (SNMP v2c)</option>
-              <option value="MIKROTIK">MikroTik (RouterOS API)</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="text-slate-400 font-medium">Host / IP Address</label>
-            <input
-              required
-              value={host}
-              onChange={(e) => setHost(e.target.value)}
-              placeholder="136.2.2.200"
-              className="w-full mt-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg outline-none text-white"
-            />
-          </div>
-
-          <div>
-            <label className="text-slate-400 font-medium">Port</label>
-            <input
-              type="number"
-              required
-              value={port}
-              onChange={(e) => setPort(Number(e.target.value))}
-              className="w-full mt-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg outline-none text-white"
-            />
-          </div>
-
-          {type === 'MIKROTIK' ? (
-            <div>
-              <label className="text-slate-400 font-medium">User API</label>
-              <input
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="User MikroTik"
-                className="w-full mt-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg outline-none text-white"
-              />
+        <div style={{ padding: '20px', maxHeight: '75vh', overflowY: 'auto', position: 'relative' }}>
+          
+          {/* Custom Toast Notification */}
+          {notification && (
+            <div style={{
+              padding: '12px 16px',
+              borderRadius: '8px',
+              marginBottom: '16px',
+              fontSize: '13px',
+              fontWeight: 500,
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              background: notification.type === 'success' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+              border: `1px solid ${notification.type === 'success' ? '#10b981' : '#ef4444'}`,
+              color: notification.type === 'success' ? '#34d399' : '#f87171'
+            }}>
+              <span>{notification.message}</span>
+              <button 
+                onClick={() => setNotification(null)}
+                style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold' }}
+              >
+                ×
+              </button>
             </div>
-          ) : (
-            <div className="hidden md:block"></div>
           )}
 
+          {/* SECTION: FORM TAMBAH / EDIT PERANGKAT */}
+          <div style={{ background: 'rgba(15, 23, 42, 0.6)', border: '1px solid #334155', borderRadius: '12px', padding: '16px', marginBottom: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <h3 style={{ color: '#fff', fontSize: '14px', margin: 0 }}>
+                {editingId !== null ? `Edit Perangkat: ${name}` : '+ Tambah Gateway Baru'}
+              </h3>
+              {editingId !== null && (
+                <button
+                  type="button"
+                  onClick={handleCancelEdit}
+                  style={{ background: 'transparent', border: 'none', color: '#94a3b8', fontSize: '12px', cursor: 'pointer' }}
+                >
+                  Batal Edit
+                </button>
+              )}
+            </div>
+
+            <form className="device-form" onSubmit={handleSubmit} style={{ margin: 0 }}>
+              <label>Jenis Perangkat</label>
+              <select
+                value={type}
+                onChange={(e) => handleTypeChange(e.target.value as 'OLT' | 'MIKROTIK')}
+              >
+                <option value="OLT">OLT ZTE (SNMP v2c)</option>
+                <option value="MIKROTIK">MikroTik (RouterOS API)</option>
+              </select>
+
+              <label>Nama Perangkat</label>
+              <input
+                required
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={type === 'OLT' ? 'Contoh: OLT ZTE Balen' : 'Contoh: MikroTik Gateway'}
+              />
+
+              <div className="device-form-row">
+                <label>
+                  Host / IP Address
+                  <input
+                    required
+                    value={host}
+                    onChange={(e) => setHost(e.target.value)}
+                    placeholder="136.2.2.200"
+                  />
+                </label>
+                <label>
+                  Port
+                  <input
+                    required
+                    value={port}
+                    onChange={(e) => setPort(e.target.value)}
+                    placeholder={type === 'OLT' ? '161' : '8728'}
+                    inputMode="numeric"
+                  />
+                </label>
+              </div>
+
+              {type === 'MIKROTIK' && (
+                <>
+                  <label>Username API</label>
+                  <input
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="admin"
+                  />
+                </>
+              )}
+
+              <label>
+                {type === 'OLT' ? 'SNMP Community (Read-Only)' : 'Password API'}
+                {editingId !== null && <span style={{ color: '#94a3b8', fontWeight: 'normal' }}> (Kosongkan jika tidak diubah)</span>}
+              </label>
+              <input
+                required={editingId === null}
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={type === 'OLT' ? 'Contoh: public' : 'Password Router'}
+              />
+
+              <div className="device-form-row" style={{ marginTop: '10px' }}>
+                <label>
+                  Brand
+                  <input
+                    value={brand}
+                    onChange={(e) => setBrand(e.target.value)}
+                    placeholder="ZTE / MikroTik"
+                  />
+                </label>
+                <label>
+                  Model
+                  <input
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    placeholder="C320 / RouterOS"
+                  />
+                </label>
+              </div>
+
+              <button type="submit" disabled={submitting} style={{ marginTop: '14px', background: editingId !== null ? '#0284c7' : '#2563eb' }}>
+                {submitting ? 'Menyimpan...' : editingId !== null ? 'Simpan Perubahan' : 'Simpan Perangkat'}
+              </button>
+            </form>
+          </div>
+
+          {/* SECTION: DAFTAR PERANGKAT */}
           <div>
-            <label className="text-slate-400 font-medium">
-              {type === 'OLT_ZTE' ? 'SNMP Community (RO)' : 'Password API'}
-            </label>
-            <input
-              required
-              type="password"
-              value={communityOrPass}
-              onChange={(e) => setCommunityOrPass(e.target.value)}
-              placeholder={type === 'OLT_ZTE' ? 'Community String' : 'Password'}
-              className="w-full mt-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg outline-none text-white"
-            />
-          </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <h3 style={{ color: '#fff', fontSize: '14px', margin: 0 }}>Daftar Gateway ({devices.length})</h3>
+              <button
+                type="button"
+                onClick={onRefresh}
+                style={{ padding: '6px 12px', fontSize: '12px', background: '#334155', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
+              >
+                Refresh Data
+              </button>
+            </div>
 
-          <div className="md:col-span-3 flex justify-end mt-2">
-            <button
-              type="submit"
-              disabled={submitting}
-              className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 rounded-lg font-semibold text-white transition"
-            >
-              {submitting ? 'Menyimpan...' : '+ Tambah Perangkat'}
-            </button>
-          </div>
-        </form>
-
-        {/* Tabel Daftar Perangkat */}
-        <div className="mt-6">
-          <div className="flex justify-between items-center mb-3">
-            <span className="text-sm font-semibold text-slate-200">Daftar Gateway ({devices.length})</span>
-            <button
-              onClick={onRefresh}
-              className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-xs rounded-lg text-slate-300"
-            >
-              Refresh
-            </button>
-          </div>
-
-          <div className="overflow-x-auto rounded-xl border border-slate-800">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-900/90 text-slate-400 uppercase text-[10px] tracking-wider">
-                <tr>
-                  <th className="p-3">Nama</th>
-                  <th className="p-3">Tipe</th>
-                  <th className="p-3">IP : Port</th>
-                  <th className="p-3">Status</th>
-                  <th className="p-3 text-right">Aksi</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800 bg-slate-950/40">
-                {devices.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="p-4 text-center text-slate-500">
-                      Belum ada perangkat yang terdaftar
-                    </td>
+            <div style={{ border: '1px solid #334155', borderRadius: '8px', overflow: 'hidden', background: '#020617' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
+                <thead>
+                  <tr style={{ background: '#0f172a', color: '#94a3b8', borderBottom: '1px solid #334155', fontSize: '11px', textTransform: 'uppercase' }}>
+                    <th style={{ padding: '12px' }}>Nama</th>
+                    <th style={{ padding: '12px' }}>Tipe</th>
+                    <th style={{ padding: '12px' }}>IP & Port</th>
+                    <th style={{ padding: '12px' }}>Status</th>
+                    <th style={{ padding: '12px', textAlign: 'right' }}>Aksi</th>
                   </tr>
-                ) : (
-                  devices.map((d) => (
-                    <tr key={d.id} className="hover:bg-slate-800/40">
-                      <td className="p-3 font-semibold text-white">{d.name}</td>
-                      <td className="p-3">
-                        <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">
-                          {d.type}
-                        </span>
-                      </td>
-                      <td className="p-3 font-mono text-slate-300">
-                        {d.host}:{d.port}
-                      </td>
-                      <td className="p-3">
-                        <span
-                          className={`px-2 py-0.5 rounded text-[11px] font-medium ${
-                            d.lastCheckStatus === 'CONNECTED'
-                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                              : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
-                          }`}
-                        >
-                          {d.lastCheckStatus === 'CONNECTED'
-                            ? `Terhubung (${d.lastCheckMessage || 'OK'})`
-                            : d.lastCheckMessage || 'Belum Diuji / Terputus'}
-                        </span>
-                      </td>
-                      <td className="p-3 text-right space-x-2">
-                        <button
-                          disabled={testingId === d.id}
-                          onClick={() => handleTest(d.id)}
-                          className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 rounded text-white font-medium transition"
-                        >
-                          {testingId === d.id ? 'Menguji...' : 'Test'}
-                        </button>
-                        <button
-                          onClick={() => onDeleteDevice(d.id)}
-                          className="px-3 py-1 bg-rose-600 hover:bg-rose-500 rounded text-white font-medium transition"
-                        >
-                          Hapus
-                        </button>
+                </thead>
+                <tbody>
+                  {devices.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>
+                        Belum ada perangkat terdaftar.
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  ) : (
+                    devices.map((d) => (
+                      <tr key={d.id} style={{ borderBottom: '1px solid #1e293b' }}>
+                        <td style={{ padding: '12px', color: '#fff', fontWeight: 600 }}>{d.name}</td>
+                        <td style={{ padding: '12px', color: '#cbd5e1' }}>{d.brand || d.type}</td>
+                        <td style={{ padding: '12px', fontFamily: 'monospace', color: '#38bdf8' }}>{d.host}:{d.port}</td>
+                        <td style={{ padding: '12px' }}>
+                          <span style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '4px', fontWeight: 500, background: d.connectionStatus === 'CONNECTED' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)', color: d.connectionStatus === 'CONNECTED' ? '#34d399' : '#f87171' }}>
+                            {d.connectionStatus === 'CONNECTED' ? 'Terhubung' : 'Terputus'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px', textAlign: 'right' }}>
+                          <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                            <button
+                              type="button"
+                              onClick={() => handleStartEdit(d)}
+                              style={{ padding: '5px 10px', background: '#0284c7', color: '#fff', border: 'none', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', fontWeight: 500 }}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              disabled={testingId === Number(d.id)}
+                              onClick={() => handleTest(Number(d.id))}
+                              style={{ padding: '5px 10px', background: '#059669', color: '#fff', border: 'none', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', fontWeight: 500 }}
+                            >
+                              {testingId === Number(d.id) ? '...' : 'Test'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(Number(d.id))}
+                              style={{ padding: '5px 10px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', fontWeight: 500 }}
+                            >
+                              Hapus
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
+
         </div>
       </div>
     </div>
