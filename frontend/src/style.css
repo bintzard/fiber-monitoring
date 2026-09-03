@@ -48,31 +48,38 @@ body {
   height: 100%;
 }
 
+.marker-wrapper {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: none !important;
+  transform: none !important;
+}
+
 .marker-dot {
   transition: 0.2s ease;
 }
 
-.blink-marker {
-  animation: blink 1s infinite;
+/* Animasi kedip dinonaktifkan total agar ringan */
+.blink-marker,
+.marker-dot.blink-marker {
+  animation: none !important;
 }
 
-@keyframes blink {
-  0% {
-    transform: scale(1);
-    box-shadow: 0 0 0 rgba(255, 0, 0, 0.7);
-  }
-
-  50% {
-    transform: scale(1.35);
-    box-shadow: 0 0 18px rgba(255, 0, 0, 0.9);
-  }
-
-  100% {
-    transform: scale(1);
-    box-shadow: 0 0 0 rgba(255, 0, 0, 0.7);
-  }
-   
+/* Leaflet popup solid, stabil, dan tidak terpengaruh animasi */
+.leaflet-popup,
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip-container,
+.marker-popup {
+  animation: none !important;
+  transform: none;
+  opacity: 1 !important;
+  filter: none !important;
 }
+
 .loading-page,
 .error-page {
   width: 100vw;
@@ -475,29 +482,6 @@ body {
   box-shadow: 0 0 16px rgba(239, 68, 68, 0.75);
 }
 
-.highlight-marker {
-  animation: redHighlightPulse 0.8s infinite;
-  box-shadow: 0 0 0 8px rgba(239, 68, 68, 0.45),
-    0 0 22px rgba(239, 68, 68, 1) !important;
-}
-
-@keyframes redHighlightPulse {
-  0% {
-    transform: scale(1);
-    opacity: 1;
-  }
-
-  50% {
-    transform: scale(1.55);
-    opacity: 0.65;
-  }
-
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-
 .clear-highlight-button {
   width: 100%;
   margin-bottom: 16px;
@@ -517,41 +501,6 @@ body {
 .drop-wire-flow {
   stroke-dasharray: 10;
   animation: flowLine 1s linear infinite;
-}
-
-@keyframes flowLine {
-  from {
-    stroke-dashoffset: 20;
-  }
-
-  to {
-    stroke-dashoffset: 0;
-  }
-}
-
-.drop-wire-broken {
-  stroke-dasharray: 8;
-  animation: brokenLineBlink 0.8s infinite;
-}
-
-@keyframes brokenLineBlink {
-  0% {
-    opacity: 1;
-  }
-
-  50% {
-    opacity: 0.35;
-  }
-
-  100% {
-    opacity: 1;
-  }
-}
-
-/* Drop wire normal: hijau menyala + arus berjalan */
-.drop-wire-flow {
-  stroke-dasharray: 10;
-  animation: flowLine 1s linear infinite;
   filter: drop-shadow(0 0 5px rgba(34, 197, 94, 0.9))
     drop-shadow(0 0 12px rgba(34, 197, 94, 0.75));
 }
@@ -560,13 +509,11 @@ body {
   from {
     stroke-dashoffset: 20;
   }
-
   to {
     stroke-dashoffset: 0;
   }
 }
 
-/* Drop wire bermasalah: merah menyala + kedip */
 .drop-wire-broken {
   stroke-dasharray: 8;
   animation: brokenLineBlink 0.8s infinite;
@@ -575,20 +522,14 @@ body {
 }
 
 @keyframes brokenLineBlink {
-  0% {
+  0%, 100% {
     opacity: 1;
   }
-
   50% {
     opacity: 0.35;
   }
-
-  100% {
-    opacity: 1;
-  }
 }
 
-/* Kabel yang sedang dipilih dari Fault Analysis */
 .fault-cable-highlight {
   animation: faultCablePulse 0.8s infinite;
   filter: drop-shadow(0 0 8px rgba(239, 68, 68, 1))
@@ -596,40 +537,11 @@ body {
 }
 
 @keyframes faultCablePulse {
-  0% {
+  0%, 100% {
     opacity: 1;
   }
-
   50% {
     opacity: 0.45;
-  }
-
-  100% {
-    opacity: 1;
-  }
-}
-
-/* Marker/titik suspect menyala merah */
-.highlight-marker {
-  animation: redHighlightPulse 0.8s infinite;
-  box-shadow: 0 0 0 8px rgba(239, 68, 68, 0.45),
-    0 0 22px rgba(239, 68, 68, 1) !important;
-}
-
-@keyframes redHighlightPulse {
-  0% {
-    transform: scale(1);
-    opacity: 1;
-  }
-
-  50% {
-    transform: scale(1.55);
-    opacity: 0.65;
-  }
-
-  100% {
-    transform: scale(1);
-    opacity: 1;
   }
 }
 
@@ -796,7 +708,6 @@ body {
     transform: translateX(24px);
     opacity: 0;
   }
-
   to {
     transform: translateX(0);
     opacity: 1;
@@ -844,6 +755,9 @@ body {
   color: #cbd5e1;
 }
 
+/* =========================================================
+   POPUP LEAFLET
+========================================================= */
 .marker-popup {
   min-width: 220px;
   display: flex;
@@ -1119,23 +1033,17 @@ body {
   from {
     stroke-dashoffset: 24;
   }
-
   to {
     stroke-dashoffset: 0;
   }
 }
 
 @keyframes cableBrokenBlink {
-  0% {
+  0%, 100% {
     opacity: 1;
   }
-
   50% {
     opacity: 0.35;
-  }
-
-  100% {
-    opacity: 1;
   }
 }
 
@@ -1243,7 +1151,6 @@ body {
   font-weight: 700;
   box-shadow: 0 10px 25px rgba(0, 0, 0, 0.35);
 }
-
 
 .marker-popup {
   width: 240px;
@@ -1627,20 +1534,6 @@ body {
 /* =========================
    AUTH USER BADGE
 ========================= */
-
-.current-user-badge {
-  height: 36px;
-  padding: 0 12px;
-  border-radius: 10px;
-  background: rgba(15, 23, 42, 0.92);
-  color: #e5e7eb;
-  font-size: 12px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  white-space: nowrap;
-  border: 1px solid rgba(148, 163, 184, 0.25);
-}
 
 .current-user-badge {
   height: 36px;
@@ -2178,33 +2071,13 @@ button.map-action-btn.logout-red-btn:hover {
   animation: cableFlow 1s linear infinite;
 }
 
-
 /* =========================
-   SEARCH HIGHLIGHT - NON TROUBLE COLOR
-   Biru/cyan dipakai untuk hasil pencarian agar tidak terlihat seperti gangguan.
+   SEARCH HIGHLIGHT
 ========================= */
 .highlight-marker {
-  animation: searchHighlightPulse 0.85s infinite !important;
   box-shadow:
-    0 0 0 8px rgba(14, 165, 233, 0.32),
+    0 0 0 8px rgba(14, 165, 233, 0.4),
     0 0 24px rgba(14, 165, 233, 0.95) !important;
-}
-
-@keyframes searchHighlightPulse {
-  0% {
-    transform: scale(1);
-    opacity: 1;
-  }
-
-  50% {
-    transform: scale(1.5);
-    opacity: 0.72;
-  }
-
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
 }
 
 .search-result.active {
@@ -2222,19 +2095,7 @@ button.map-action-btn.logout-red-btn:hover {
 
 /* =========================
    ODP PORT CAPACITY VISUAL
-   Warna kapasitas dibuat berbeda dari status gangguan:
-   Merah/Oranye tetap untuk OFFLINE/WARNING.
-   Kapasitas ODP memakai Cyan/Biru/Ungu/Magenta.
 ========================= */
-.marker-wrapper {
-  position: relative;
-  width: 30px;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .marker-dot.odp-capacity-marker {
   box-shadow:
     0 0 0 3px rgba(255, 255, 255, 0.78),
@@ -2360,10 +2221,8 @@ button.map-action-btn.logout-red-btn:hover {
   background: linear-gradient(90deg, #db2777, #f472b6) !important;
 }
 
-
 /* =========================
    DROP WIRE LIVE STATUS FIX
-   Drop wire mengikuti status client tujuan secara realtime.
 ========================= */
 .leaflet-overlay-pane path.cable-drop-online {
   stroke: #22c55e !important;
@@ -2467,7 +2326,6 @@ button.map-action-btn.logout-red-btn:hover {
 
 /* =========================
    MOBILE RESPONSIVE LAYOUT
-   Optimasi tampilan HP tanpa mengubah fitur desktop.
 ========================= */
 @media (max-width: 768px) {
   html,
@@ -2817,13 +2675,7 @@ button.map-action-btn.logout-red-btn:hover {
   }
 }
 
-/* =========================================================
-   MOBILE POLISH FINAL - appended only
-   Catatan: blok ini hanya override tampilan HP dan tombol animasi.
-   Tidak menghapus style desktop/fitur lama.
-========================================================= */
-
-/* Base style tombol animasi kabel, dipakai kalau class ada di NetworkMap */
+/* Base style tombol animasi kabel */
 .floating-cable-animation-button {
   position: absolute;
   top: 64px;
@@ -2872,14 +2724,6 @@ button.map-action-btn.logout-red-btn:hover {
 }
 
 @media (max-width: 768px) {
-  html,
-  body,
-  #root {
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-  }
-
   .map-page {
     position: relative !important;
     display: block !important;
@@ -2901,7 +2745,6 @@ button.map-action-btn.logout-red-btn:hover {
     height: 100dvh !important;
   }
 
-  /* Toolbar atas dibuat menjadi chip horizontal scroll agar tidak numpuk */
   .map-mode-control {
     top: 10px !important;
     left: 58px !important;
@@ -2952,7 +2795,6 @@ button.map-action-btn.logout-red-btn:hover {
     max-width: 72px !important;
   }
 
-  /* Sidebar sebagai drawer. Saat collapsed tidak makan ruang map. */
   .sidebar {
     position: absolute !important;
     z-index: 1400 !important;
@@ -2987,7 +2829,6 @@ button.map-action-btn.logout-red-btn:hover {
     font-size: 12px !important;
   }
 
-  /* Tombol buka/tutup sidebar tidak menabrak zoom control */
   .sidebar-toggle {
     z-index: 1550 !important;
     width: 44px !important;
@@ -3075,7 +2916,6 @@ button.map-action-btn.logout-red-btn:hover {
     min-height: 38px !important;
   }
 
-  /* Modal add/edit dibuat full screen di HP */
   .app-modal-backdrop {
     align-items: stretch !important;
     justify-content: stretch !important;
@@ -3217,34 +3057,27 @@ button.map-action-btn.logout-red-btn:hover {
   }
 }
 
-/* =========================================================
-   MOBILE POSITION FIX - hamburger & status card
-   Ditambahkan di paling bawah agar tidak menghapus style lama.
-========================================================= */
 @media (max-width: 768px) {
-  /* Kontrol zoom bawaan Leaflet tetap di atas kiri */
   .leaflet-top.leaflet-left {
     top: 58px !important;
   }
 
-  /* Tombol garis tiga diturunkan agar tidak menutupi tombol + / - map */
   .sidebar-toggle.collapsed {
     top: 142px !important;
     left: 14px !important;
   }
 
-  /* Saat sidebar terbuka, tombol close tetap di pojok drawer */
   .sidebar-toggle.expanded {
     top: 14px !important;
     left: calc(min(86vw, 360px) - 58px) !important;
   }
 
-  /* Kartu status NODE/ONLINE/OFFLINE/ODP dipindah ke kiri bawah, agak naik */
   .server-mini-card {
     top: auto !important;
     left: 12px !important;
     bottom: 88px !important;
-    min-width: 126px !important;    padding: 9px 10px !important;
+    min-width: 126px !important;
+    padding: 9px 10px !important;
     border-radius: 12px !important;
     font-size: 10px !important;
   }
@@ -3264,15 +3097,6 @@ button.map-action-btn.logout-red-btn:hover {
   }
 }
 
-
-/* =========================================================
-   FIX FINAL - Map picking, cable route editor, and form fields
-   Ditambahkan tanpa menghapus style/fitur lama.
-========================================================= */
-
-/* Saat Ambil Titik dari Peta aktif, modal/form disembunyikan sementara
-   agar klik pada map Leaflet bisa diterima. Setelah titik dipilih,
-   NetworkMap akan mematikan mode picking dan form muncul lagi. */
 .app-modal-backdrop.map-picking-hidden {
   pointer-events: none !important;
   background: transparent !important;
@@ -3282,8 +3106,6 @@ button.map-action-btn.logout-red-btn:hover {
   display: none !important;
 }
 
-/* Panel desktop untuk edit jalur kabel. Sebelumnya elemen muncul polos/putih
-   karena style utama belum ada di luar media query mobile. */
 .cable-route-editor-panel {
   position: absolute;
   top: 72px;
@@ -3374,7 +3196,6 @@ button.map-action-btn.logout-red-btn:hover {
   cursor: not-allowed;
 }
 
-/* Textarea Add Client agar visualnya sama dengan input lain. */
 .add-node-form textarea,
 .edit-node-form textarea {
   width: 100%;
@@ -3432,12 +3253,6 @@ button.map-action-btn.logout-red-btn:hover {
   }
 }
 
-/* =========================================================
-   DRAGGABLE TEMP LOCATION MARKER
-   Tambahan untuk hapus titik, ambil ulang, dan geser marker.
-   Aman ditaruh paling bawah tanpa menghapus style lama.
-========================================================= */
-
 .temp-location-marker {
   width: 26px;
   height: 26px;
@@ -3447,24 +3262,6 @@ button.map-action-btn.logout-red-btn:hover {
   box-shadow:
     0 0 0 5px rgba(14, 165, 233, 0.3),
     0 0 22px rgba(14, 165, 233, 0.95);
-  animation: tempLocationPulse 1s ease-in-out infinite;
-}
-
-@keyframes tempLocationPulse {
-  0% {
-    transform: scale(1);
-    opacity: 1;
-  }
-
-  50% {
-    transform: scale(1.25);
-    opacity: 0.8;
-  }
-
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
 }
 
 .temp-location-popup {
@@ -3531,11 +3328,7 @@ button.map-action-btn.logout-red-btn:hover {
     min-height: 42px;
   }
 }
-/* =========================================================
-   NETWORK DEVICE PANEL
-   Menu perangkat monitoring untuk tambah/edit MikroTik dan OLT.
-   Aman ditaruh paling bawah tanpa menghapus style lama.
-========================================================= */
+
 .network-device-panel {
   display: flex;
   flex-direction: column;
@@ -3793,12 +3586,10 @@ button.map-action-btn.logout-red-btn:hover {
   }
 }
 
-/* Sembunyikan SEMUA kabel saat zoom sangat jauh (zoom level 5 - 14) */
 .leaflet-container:not(.leaflet-zoom-15):not(.leaflet-zoom-16):not(.leaflet-zoom-17):not(.leaflet-zoom-18):not(.leaflet-zoom-19):not(.leaflet-zoom-20):not(.leaflet-zoom-21):not(.leaflet-zoom-22) .fiber-cable {
   display: none !important;
 }
 
-/* Sembunyikan khusus kabel DROP_WIRE saat zoom sedang (zoom level 15 & 16) */
 .leaflet-zoom-15 .cable-drop,
 .leaflet-zoom-15 .cable-drop-static,
 .leaflet-zoom-16 .cable-drop,

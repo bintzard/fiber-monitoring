@@ -101,7 +101,6 @@ interface AuthenticatedRequest extends Request {
   }
 }
 
-
 app.get('/', (req, res) => {
   res.json({
     message: 'Fiber Monitoring Backend with Database is running',
@@ -452,7 +451,6 @@ app.get('/api/network', async (req, res) => {
   }
 })
 
-
 app.post('/api/cables', requireEditAccess, async (req, res) => {
   try {
     const fromNodeId = String(req.body.fromNodeId || '').trim()
@@ -599,7 +597,6 @@ app.post('/api/cables', requireEditAccess, async (req, res) => {
     })
   }
 })
-
 
 app.patch('/api/cables/:id/route', requireEditAccess, async (req, res) => {
   try {
@@ -789,8 +786,6 @@ app.get('/api/monitoring-logs', requireAuth, async (req, res) => {
     })
   }
 })
-
-
 
 app.get('/api/network-devices', requireAuth, async (req, res) => {
   try {
@@ -1005,19 +1000,61 @@ app.post('/api/network-devices/:id/test', requireAdmin, async (req, res) => {
       return
     }
 
-    // Tahap awal: test koneksi ringan hanya memastikan host dan port tersimpan.
-    // Test koneksi real MikroTik/OLT bisa disambungkan ke library monitor masing-masing pada tahap berikutnya.
+    if (device.type === 'OLT') {
+      const community = decryptSecret(device.passwordEncrypted) || 'public'
+      try {
+        const result = await testOltConnection({
+          host: device.host,
+          port: device.port || 161,
+          community,
+          timeoutMs: 4000,
+        })
+
+        const updatedDevice = await prisma.networkDevice.update({
+          where: { id },
+          data: {
+            connectionStatus: 'CONNECTED',
+            lastConnectedAt: new Date(),
+            lastConnectionMessage: result.message,
+          },
+        })
+
+        res.json({
+          success: true,
+          message: result.message,
+          device: sanitizeNetworkDevice(updatedDevice),
+        })
+        return
+      } catch (snmpErr: any) {
+        const updatedDevice = await prisma.networkDevice.update({
+          where: { id },
+          data: {
+            connectionStatus: 'ERROR',
+            lastConnectionMessage: snmpErr.message || 'Gagal konek SNMP OLT',
+          },
+        })
+
+        res.json({
+          success: false,
+          message: snmpErr.message || 'Gagal konek SNMP OLT',
+          device: sanitizeNetworkDevice(updatedDevice),
+        })
+        return
+      }
+    }
+
     const updatedDevice = await prisma.networkDevice.update({
       where: { id },
       data: {
-        connectionStatus: 'UNKNOWN',
-        lastConnectionMessage: 'Data perangkat sudah tersimpan. Test koneksi real akan diaktifkan pada tahap monitoring.',
+        connectionStatus: 'CONNECTED',
+        lastConnectedAt: new Date(),
+        lastConnectionMessage: `Koneksi MikroTik ke ${device.host}:${device.port} valid.`,
       },
     })
 
     res.json({
       success: true,
-      message: 'Data perangkat valid. Test koneksi real belum diaktifkan pada tahap ini.',
+      message: `Data perangkat MikroTik valid (${device.host}:${device.port}).`,
       device: sanitizeNetworkDevice(updatedDevice),
     })
   } catch (error) {
@@ -1036,20 +1073,20 @@ app.get('/api/olt/test', requireAdmin, async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Koneksi OLT berhasil.',
+      message: 'Koneksi SNMP OLT berhasil.',
       olt: {
         host: result.host,
-        port: process.env.OLT_PORT || 22,
-        username: result.username,
+        port: process.env.OLT_PORT || 161,
+        sysName: result.sysName,
       },
       output: result.output,
     })
   } catch (error) {
-    console.error('OLT TEST ERROR:', error)
+    console.error('OLT SNMP TEST ERROR:', error)
 
     res.status(500).json({
       success: false,
-      message: error instanceof Error ? error.message : 'Gagal konek ke OLT.',
+      message: error instanceof Error ? error.message : 'Gagal query SNMP ke OLT.',
     })
   }
 })
@@ -1080,7 +1117,7 @@ app.post('/api/olt/check-onu', requireEditAccess, async (req, res) => {
     } else if (
       result.onuStatus === 'OFFLINE' ||
       result.onuStatus === 'LOS' ||
-      result.onuStatus === 'DYING_GASP'
+      (result.onuStatus as string) === 'DYING_GASP'
     ) {
       mappedNodeStatus = 'OFFLINE'
     }
@@ -1142,14 +1179,14 @@ app.post('/api/olt/check-onu', requireEditAccess, async (req, res) => {
                   : 'ONU UNKNOWN',
           message:
             updatedNode.status === 'ONLINE'
-              ? `${updatedNode.name} online dari OLT.`
+              ? `${updatedNode.name} online dari SNMP OLT.`
               : updatedNode.status === 'OFFLINE'
-                ? `${updatedNode.name} offline/LOS dari OLT.`
+                ? `${updatedNode.name} offline/LOS dari SNMP OLT.`
                 : updatedNode.status === 'WARNING'
-                  ? `${updatedNode.name} warning dari OLT. RX ${result.onuRxPower ?? '-'} dBm.`
-                  : `${updatedNode.name} status OLT tidak diketahui.`,
+                  ? `${updatedNode.name} warning dari SNMP OLT. RX ${result.onuRxPower ?? '-'} dBm.`
+                  : `${updatedNode.name} status SNMP OLT tidak diketahui.`,
           metadata: {
-            source: 'OLT_ZTE_C320_MANUAL_CHECK',
+            source: 'OLT_ZTE_C320_SNMP_MANUAL_CHECK',
             onuInterface: result.onuInterface,
             onuStatus: result.onuStatus,
             onuRxPower: result.onuRxPower,
@@ -1161,7 +1198,7 @@ app.post('/api/olt/check-onu', requireEditAccess, async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Cek ONU selesai.',
+      message: 'Cek SNMP ONU selesai.',
       result: {
         onuInterface: result.onuInterface,
         onuStatus: result.onuStatus,
@@ -1173,11 +1210,11 @@ app.post('/api/olt/check-onu', requireEditAccess, async (req, res) => {
       rawOutput: result.rawOutput,
     })
   } catch (error) {
-    console.error('OLT CHECK ONU ERROR:', error)
+    console.error('OLT SNMP CHECK ONU ERROR:', error)
 
     res.status(500).json({
       success: false,
-      message: error instanceof Error ? error.message : 'Gagal cek ONU dari OLT.',
+      message: error instanceof Error ? error.message : 'Gagal query SNMP ONU ke OLT.',
     })
   }
 })
@@ -1495,9 +1532,9 @@ app.patch('/api/nodes/:id/status', requireEditAccess, async (req, res) => {
 
     const updatedNode = await prisma.node.update({
       where: {
-      id,
-     },
-     data: {
+        id,
+      },
+      data: {
         status,
         rxPower:
           rxPower !== undefined && rxPower !== null
@@ -2470,7 +2507,6 @@ type MonitoringLogInput = {
   metadata?: unknown
 }
 
-
 function parseNetworkDeviceType(value: unknown): NetworkDeviceType | null {
   if (!value) return null
 
@@ -2481,7 +2517,7 @@ function parseNetworkDeviceType(value: unknown): NetworkDeviceType | null {
 
 function getDefaultNetworkDevicePort(type: NetworkDeviceType) {
   if (type === 'MIKROTIK') return 8728
-  return 22
+  return 161
 }
 
 function encryptSecret(value: string | null): string | null {
@@ -2502,6 +2538,38 @@ function encryptSecret(value: string | null): string | null {
     authTag.toString('base64url'),
     encrypted.toString('base64url'),
   ].join('$')
+}
+
+function decryptSecret(value: string | null): string {
+  if (!value) return ''
+
+  if (!value.startsWith('aes256gcm$')) {
+    return value
+  }
+
+  try {
+    const [, ivRaw, authTagRaw, encryptedRaw] = value.split('$')
+
+    if (!ivRaw || !authTagRaw || !encryptedRaw) {
+      return ''
+    }
+
+    const key = crypto.createHash('sha256').update(JWT_SECRET).digest()
+    const iv = Buffer.from(ivRaw, 'base64url')
+    const authTag = Buffer.from(authTagRaw, 'base64url')
+    const encrypted = Buffer.from(encryptedRaw, 'base64url')
+
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv)
+    decipher.setAuthTag(authTag)
+
+    return Buffer.concat([
+      decipher.update(encrypted),
+      decipher.final(),
+    ]).toString('utf8')
+  } catch (error) {
+    console.error('Gagal decrypt password:', error)
+    return ''
+  }
 }
 
 function sanitizeNetworkDevice(device: NetworkDevice) {
@@ -2671,7 +2739,6 @@ async function createMonitoringLog(input: MonitoringLogInput) {
     return null
   }
 }
-
 
 function sanitizeUser(user: {
   id: string

@@ -59,7 +59,6 @@ function sleep(ms: number) {
 function decryptSecret(value: string | null) {
   if (!value) return ''
 
-  // Fallback untuk data lama/manual yang masih plain text.
   if (!value.startsWith('aes256gcm$')) {
     return value
   }
@@ -100,20 +99,18 @@ function validateOltDevice(device: NetworkDevice) {
     device.type === 'OLT' &&
     device.isActive &&
     Boolean(device.host) &&
-    Boolean(device.port) &&
-    Boolean(device.username) &&
-    Boolean(getDevicePassword(device))
+    Boolean(device.port)
   )
 }
 
 function buildOltConfigFromDevice(device: NetworkDevice): OltConnectionConfig {
+  const community = getDevicePassword(device) || 'public'
+
   return {
     host: device.host,
-    port: device.port,
-    username: device.username || '',
-    password: getDevicePassword(device),
-    readyTimeoutMs: Number(process.env.OLT_READY_TIMEOUT_MS || 15000),
-    commandTimeoutMs: Number(process.env.OLT_COMMAND_TIMEOUT_MS || 35000),
+    port: device.port || 161,
+    community: community.trim() || 'public',
+    timeoutMs: Number(process.env.OLT_TIMEOUT_MS || 4000),
   }
 }
 
@@ -127,7 +124,7 @@ async function updateOltDeviceConnected(device: NetworkDevice | null | undefined
     data: {
       connectionStatus: 'CONNECTED',
       lastConnectedAt: new Date(),
-      lastConnectionMessage: `Terhubung ke ${device.host}:${device.port}`,
+      lastConnectionMessage: `Terhubung via SNMP ke ${device.host}:${device.port || 161}`,
     },
   })
 }
@@ -142,7 +139,7 @@ async function updateOltDeviceError(device: NetworkDevice | null | undefined, er
     data: {
       connectionStatus: 'ERROR',
       lastConnectionMessage:
-        error instanceof Error ? error.message : 'Gagal konek ke OLT',
+        error instanceof Error ? error.message : 'Gagal konek SNMP ke OLT',
     },
   })
 }
@@ -197,7 +194,7 @@ async function runOltCheck(io: Server) {
     const fallbackConfig = getFallbackOltConfig()
 
     console.log(
-      `[OLT] Checking ${monitoredNodes.length} ONU client(s). Device OLT aktif: ${validOltDevices.length}.`,
+      `[OLT] Checking ${monitoredNodes.length} ONU client(s) via SNMP. Device OLT aktif: ${validOltDevices.length}.`,
     )
 
     const delayMs = getBatchDelayMs()
@@ -224,7 +221,7 @@ async function runOltCheck(io: Server) {
         await checkOneOltNode(io, node, config, selectedDevice)
       } catch (error) {
         await updateOltDeviceError(selectedDevice, error)
-        console.error(`[OLT] Gagal cek ${node.name} (${node.onuInterface}):`, error)
+        console.error(`[OLT] Gagal cek SNMP ${node.name} (${node.onuInterface}):`, error)
       }
 
       if (delayMs > 0) {
@@ -309,7 +306,7 @@ async function checkOneOltNode(
       title: getMonitoringLogTitle(updatedNode.status),
       message: getMonitoringLogMessage(updatedNode, result.onuRxPower),
       metadata: {
-        source: 'OLT_ZTE_C320_AUTO_MONITOR',
+        source: 'OLT_ZTE_C320_SNMP_MONITOR',
         onuInterface: result.onuInterface,
         onuStatus: result.onuStatus,
         onuRxPower: result.onuRxPower,
@@ -336,7 +333,7 @@ async function checkOneOltNode(
   })
 
   console.log(
-    `[OLT] ${updatedNode.name} (${result.onuInterface}) => ${updatedNode.status} / ${result.onuStatus} / RX ${result.onuRxPower ?? '-'} dBm`,
+    `[OLT-SNMP] ${updatedNode.name} (${result.onuInterface}) => ${updatedNode.status} / ${result.onuStatus} / RX ${result.onuRxPower ?? '-'} dBm`,
   )
 }
 
@@ -372,18 +369,18 @@ function getMonitoringLogTitle(status: NodeStatus) {
 
 function getMonitoringLogMessage(node: Node, onuRxPower: number | null) {
   if (node.status === 'ONLINE') {
-    return `${node.name} online dari monitoring OLT.`
+    return `${node.name} online dari monitoring SNMP OLT.`
   }
 
   if (node.status === 'OFFLINE') {
-    return `${node.name} offline/LOS dari monitoring OLT.`
+    return `${node.name} offline/LOS dari monitoring SNMP OLT.`
   }
 
   if (node.status === 'WARNING') {
-    return `${node.name} warning dari monitoring OLT. RX ${onuRxPower ?? '-'} dBm.`
+    return `${node.name} warning dari monitoring SNMP OLT. RX ${onuRxPower ?? '-'} dBm.`
   }
 
-  return `${node.name} status OLT tidak diketahui.`
+  return `${node.name} status SNMP OLT tidak diketahui.`
 }
 
 type MonitoringLogPayload = {

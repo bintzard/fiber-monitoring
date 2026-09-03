@@ -250,7 +250,7 @@ function createMarkerIcon(
     ? capacityInfo.markerColor
     : getMarkerColor(node.status)
   const color = isHighlighted ? '#0ea5e9' : markerColor
-  const blinkClass = node.status === 'OFFLINE' ? 'blink-marker' : ''
+  const blinkClass = ''
   const highlightClass = isHighlighted ? 'highlight-marker' : ''
   const capacityClass = shouldUseCapacityColor
     ? `odp-capacity-marker odp-capacity-${capacityInfo.state}`
@@ -607,12 +607,6 @@ async function fetchMonitoringLogs() {
   return (data.logs || []).map(mapMonitoringLogToHistoryItem)
 }
 
-function getDeviceTypeLabel(type: NetworkDeviceRecord['type']) {
-  if (type === 'MIKROTIK') return 'MikroTik'
-  if (type === 'OLT') return 'OLT'
-  return type
-}
-
 function getDeviceStatusLabel(status: NetworkDeviceRecord['connectionStatus']) {
   if (status === 'CONNECTED') return 'Terhubung'
   if (status === 'DISCONNECTED') return 'Terputus'
@@ -626,6 +620,7 @@ function NetworkDevicePanel() {
   const [submitting, setSubmitting] = useState(false)
   const [testingDeviceId, setTestingDeviceId] = useState<string | null>(null)
   const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null)
+  const [isDeviceModalOpen, setIsDeviceModalOpen] = useState(false)
   const [message, setMessage] = useState('')
   const [messageType, setMessageType] = useState<'success' | 'error'>('success')
 
@@ -663,6 +658,7 @@ function NetworkDevicePanel() {
     setModel('RouterOS')
     setNotes('')
     setIsActive(true)
+    setIsDeviceModalOpen(false)
   }, [])
 
   const refreshDevices = useCallback(async () => {
@@ -698,16 +694,25 @@ function NetworkDevicePanel() {
     return () => window.clearTimeout(timer)
   }, [refreshDevices])
 
+  function handleOpenAddModal() {
+    resetForm()
+    setIsDeviceModalOpen(true)
+  }
+
   function handleTypeChange(nextType: NetworkDeviceRecord['type']) {
     setType(nextType)
 
     if (!editingDeviceId) {
       if (nextType === 'MIKROTIK') {
         setPort('8728')
+        setUsername('')
+        setPassword('')
         setBrand('MikroTik')
         setModel('RouterOS')
       } else {
-        setPort('22')
+        setPort('161')
+        setUsername('snmp')
+        setPassword('public')
         setBrand('ZTE')
         setModel('C320')
       }
@@ -727,6 +732,7 @@ function NetworkDevicePanel() {
     setNotes(device.notes || '')
     setIsActive(device.isActive)
     setMessage('')
+    setIsDeviceModalOpen(true)
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -735,7 +741,7 @@ function NetworkDevicePanel() {
 
     const cleanName = name.trim()
     const cleanHost = host.trim()
-    const cleanUsername = username.trim()
+    const cleanUsername = type === 'OLT' ? (username.trim() || 'snmp') : username.trim()
     const cleanPassword = password.trim()
     const parsedPort = Number(port)
 
@@ -757,15 +763,19 @@ function NetworkDevicePanel() {
       return
     }
 
-    if (!cleanUsername) {
+    if (type === 'MIKROTIK' && !cleanUsername) {
       setMessageType('error')
-      setMessage('Username perangkat wajib diisi.')
+      setMessage('Username MikroTik wajib diisi.')
       return
     }
 
     if (!editingDeviceId && !cleanPassword) {
       setMessageType('error')
-      setMessage('Password wajib diisi saat menambah perangkat baru.')
+      setMessage(
+        type === 'OLT'
+          ? 'SNMP Community wajib diisi (misal: public).'
+          : 'Password perangkat wajib diisi.',
+      )
       return
     }
 
@@ -882,10 +892,28 @@ function NetworkDevicePanel() {
           <strong>{mikrotikCount}</strong>
         </div>
         <div>
-          <span>OLT</span>
+          <span>OLT (SNMP)</span>
           <strong>{oltCount}</strong>
         </div>
       </div>
+
+      <button
+        type="button"
+        className="add-device-main-btn"
+        onClick={handleOpenAddModal}
+        style={{
+          width: '100%',
+          padding: '10px',
+          borderRadius: '10px',
+          border: 'none',
+          background: '#16a34a',
+          color: '#ffffff',
+          fontWeight: 'bold',
+          cursor: 'pointer',
+        }}
+      >
+        + Tambah Perangkat
+      </button>
 
       {message && (
         <div className={`admin-panel-message ${messageType}`}>
@@ -893,118 +921,152 @@ function NetworkDevicePanel() {
         </div>
       )}
 
-      <form className="device-form" onSubmit={handleSubmit}>
-        <div className="form-header-row">
-          <h3>{editingDeviceId ? 'Edit Perangkat' : 'Tambah Perangkat'}</h3>
-          {editingDeviceId && (
-            <button type="button" className="close-form-button" onClick={resetForm}>
-              Batal Edit
-            </button>
-          )}
+      {/* POPUP / MODAL FORM PERANGKAT (ADD & EDIT) */}
+      {isDeviceModalOpen && (
+        <div className="app-modal-backdrop">
+          <div className="app-modal app-modal-form">
+            <div className="app-modal-header">
+              <div>
+                <h2>{editingDeviceId ? 'Edit Perangkat' : 'Tambah Perangkat'}</h2>
+                <p>
+                  {type === 'OLT'
+                    ? 'Koneksi OLT via SNMP UDP Port 161'
+                    : 'Koneksi MikroTik via RouterOS API Port 8728'}
+                </p>
+              </div>
+              <button type="button" className="app-modal-close" onClick={resetForm}>
+                ×
+              </button>
+            </div>
+
+            <form className="device-form" onSubmit={handleSubmit} style={{ padding: '14px' }}>
+              <label>Jenis Perangkat</label>
+              <select
+                value={type}
+                onChange={(event) =>
+                  handleTypeChange(event.target.value as NetworkDeviceRecord['type'])
+                }
+              >
+                <option value="MIKROTIK">MikroTik (RouterOS API)</option>
+                <option value="OLT">OLT (SNMP v2c)</option>
+              </select>
+
+              <label>Nama Perangkat</label>
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder={type === 'OLT' ? 'Contoh: OLT ZTE Balen Central' : 'Contoh: MikroTik Mayang Kawis'}
+              />
+
+              <div className="device-form-row">
+                <label>
+                  Host / IP
+                  <input
+                    value={host}
+                    onChange={(event) => setHost(event.target.value)}
+                    placeholder="10.103.99.45"
+                  />
+                </label>
+                <label>
+                  Port
+                  <input
+                    value={port}
+                    onChange={(event) => setPort(event.target.value)}
+                    placeholder={type === 'MIKROTIK' ? '8728' : '161'}
+                    inputMode="numeric"
+                  />
+                </label>
+              </div>
+
+              {type === 'MIKROTIK' ? (
+                <>
+                  <label>Username</label>
+                  <input
+                    value={username}
+                    onChange={(event) => setUsername(event.target.value)}
+                    placeholder="Username API MikroTik"
+                  />
+
+                  <label>Password</label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    placeholder={
+                      editingDeviceId
+                        ? 'Kosongkan jika tidak ingin mengganti password'
+                        : 'Password akun MikroTik'
+                    }
+                  />
+                </>
+              ) : (
+                <>
+                  <label>SNMP Community (Read-Only)</label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    placeholder={
+                      editingDeviceId
+                        ? 'Kosongkan jika tidak ingin mengubah community'
+                        : 'Default: public'
+                    }
+                  />
+                  <small style={{ color: '#94a3b8', fontSize: '11px', marginTop: '-4px' }}>
+                    Community string yang diset di OLT untuk hak akses snmpwalk/get.
+                  </small>
+                </>
+              )}
+
+              <div className="device-form-row">
+                <label>
+                  Brand
+                  <input
+                    value={brand}
+                    onChange={(event) => setBrand(event.target.value)}
+                    placeholder={type === 'OLT' ? 'ZTE / Huawei / HSGQ' : 'MikroTik'}
+                  />
+                </label>
+                <label>
+                  Model
+                  <input
+                    value={model}
+                    onChange={(event) => setModel(event.target.value)}
+                    placeholder={type === 'OLT' ? 'C320 / C300' : 'RouterOS'}
+                  />
+                </label>
+              </div>
+
+              <label>Catatan</label>
+              <textarea
+                value={notes}
+                onChange={(event) => setNotes(event.target.value)}
+                placeholder="Catatan lokasi atau konfigurasi"
+                rows={2}
+              />
+
+              <label className="device-checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={isActive}
+                  onChange={(event) => setIsActive(event.target.checked)}
+                />
+                Perangkat aktif dipakai monitoring
+              </label>
+
+              <button type="submit" disabled={submitting}>
+                {submitting
+                  ? 'Menyimpan...'
+                  : editingDeviceId
+                    ? 'Simpan Perubahan'
+                    : 'Tambah Perangkat'}
+              </button>
+            </form>
+          </div>
         </div>
+      )}
 
-        <label>Jenis Perangkat</label>
-        <select
-          value={type}
-          onChange={(event) =>
-            handleTypeChange(event.target.value as NetworkDeviceRecord['type'])
-          }
-        >
-          <option value="MIKROTIK">MikroTik</option>
-          <option value="OLT">OLT</option>
-        </select>
-
-        <label>Nama Perangkat</label>
-        <input
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          placeholder="Contoh: MikroTik Mayang Kawis"
-        />
-
-        <div className="device-form-row">
-          <label>
-            Host / IP
-            <input
-              value={host}
-              onChange={(event) => setHost(event.target.value)}
-              placeholder="10.103.99.45"
-            />
-          </label>
-          <label>
-            Port
-            <input
-              value={port}
-              onChange={(event) => setPort(event.target.value)}
-              placeholder={type === 'MIKROTIK' ? '8728' : '22'}
-              inputMode="numeric"
-            />
-          </label>
-        </div>
-
-        <label>Username</label>
-        <input
-          value={username}
-          onChange={(event) => setUsername(event.target.value)}
-          placeholder="Username perangkat"
-        />
-
-        <label>Password</label>
-        <input
-          type="password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          placeholder={
-            editingDeviceId
-              ? 'Kosongkan jika tidak ingin mengganti password'
-              : 'Password perangkat'
-          }
-        />
-
-        <div className="device-form-row">
-          <label>
-            Brand
-            <input
-              value={brand}
-              onChange={(event) => setBrand(event.target.value)}
-              placeholder="MikroTik / ZTE"
-            />
-          </label>
-          <label>
-            Model
-            <input
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
-              placeholder="RouterOS / C320"
-            />
-          </label>
-        </div>
-
-        <label>Catatan</label>
-        <textarea
-          value={notes}
-          onChange={(event) => setNotes(event.target.value)}
-          placeholder="Catatan opsional"
-          rows={2}
-        />
-
-        <label className="device-checkbox-row">
-          <input
-            type="checkbox"
-            checked={isActive}
-            onChange={(event) => setIsActive(event.target.checked)}
-          />
-          Perangkat aktif dipakai monitoring
-        </label>
-
-        <button type="submit" disabled={submitting}>
-          {submitting
-            ? 'Menyimpan...'
-            : editingDeviceId
-              ? 'Simpan Perubahan'
-              : 'Tambah Perangkat'}
-        </button>
-      </form>
-
+      {/* DAFTAR PERANGKAT DI SIDEBAR */}
       <div className="device-list-card">
         <div className="device-list-header">
           <h3>Daftar Perangkat</h3>
@@ -1014,7 +1076,7 @@ function NetworkDevicePanel() {
         </div>
 
         {sortedDevices.length === 0 ? (
-          <p className="admin-empty-state">Belum ada MikroTik atau OLT.</p>
+          <p className="admin-empty-state">Belum ada MikroTik atau OLT terdaftar.</p>
         ) : (
           <div className="device-list">
             {sortedDevices.map((device) => (
@@ -1023,7 +1085,7 @@ function NetworkDevicePanel() {
                   <div>
                     <strong>{device.name}</strong>
                     <span>
-                      {getDeviceTypeLabel(device.type)} • {device.host}:{device.port}
+                      {device.type === 'OLT' ? 'OLT (SNMP)' : 'MikroTik (API)'} • {device.host}:{device.port}
                     </span>
                   </div>
                   <span
@@ -1034,8 +1096,14 @@ function NetworkDevicePanel() {
                 </div>
 
                 <div className="device-meta-grid">
-                  <span>User: <b>{device.username}</b></span>
-                  <span>Password: <b>{device.hasPassword ? 'Tersimpan' : 'Belum ada'}</b></span>
+                  {device.type === 'MIKROTIK' ? (
+                    <>
+                      <span>User: <b>{device.username}</b></span>
+                      <span>Password: <b>{device.hasPassword ? 'Tersimpan' : 'Belum ada'}</b></span>
+                    </>
+                  ) : (
+                    <span>Community: <b>{device.hasPassword ? 'Tersimpan' : 'public'}</b></span>
+                  )}
                   <span>Brand: <b>{device.brand || '-'}</b></span>
                   <span>Model: <b>{device.model || '-'}</b></span>
                   <span>Aktif: <b>{device.isActive ? 'Ya' : 'Tidak'}</b></span>
@@ -3538,4 +3606,4 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
       </div>
     </div>
   )
-} 
+}
