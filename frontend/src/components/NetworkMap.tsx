@@ -20,6 +20,7 @@ import AddClientForm from './AddClientForm'
 import EditClientForm from './EditClientForm'
 import MarkerClusterGroup from './MarkerCluster'
 import CableLayer from './CableLayer'
+import { DeviceModal, type Device } from './DeviceModal'
 
 const API_BASE_URL =
   import.meta.env.VITE_API_URL ||
@@ -86,26 +87,7 @@ interface MonitoringLogRecord {
   } | null
 }
 
-interface NetworkDeviceRecord {
-  id: string
-  name: string
-  type: 'MIKROTIK' | 'OLT'
-  host: string
-  port: number
-  username: string
-  hasPassword: boolean
-  brand: string | null
-  model: string | null
-  notes: string | null
-  isActive: boolean
-  connectionStatus: 'UNKNOWN' | 'CONNECTED' | 'DISCONNECTED' | 'ERROR'
-  lastConnectedAt: string | null
-  lastConnectionMessage: string | null
-  createdAt: string
-  updatedAt: string
-}
-
-type SidebarPanel = 'search' | 'alert' | 'filter' | 'stats' | 'devices'
+type SidebarPanel = 'search' | 'alert' | 'filter' | 'stats'
 type PickingLocationSource = 'node' | 'client' | null
 type CableTypeValue = 'BACKBONE' | 'DISTRIBUTION' | 'DROP_WIRE'
 type CableStatusValue = 'NORMAL' | 'AFFECTED' | 'BROKEN' | 'UNKNOWN'
@@ -538,7 +520,6 @@ function getPanelTitle(panel: SidebarPanel) {
   if (panel === 'alert') return 'Alert Gangguan'
   if (panel === 'filter') return 'Filter Map'
   if (panel === 'stats') return 'Statistik'
-  if (panel === 'devices') return 'Perangkat Monitoring'
   return 'Panel'
 }
 
@@ -607,541 +588,6 @@ async function fetchMonitoringLogs() {
   return (data.logs || []).map(mapMonitoringLogToHistoryItem)
 }
 
-function getDeviceStatusLabel(status: NetworkDeviceRecord['connectionStatus']) {
-  if (status === 'CONNECTED') return 'Terhubung'
-  if (status === 'DISCONNECTED') return 'Terputus'
-  if (status === 'ERROR') return 'Error'
-  return 'Belum dites'
-}
-
-function NetworkDevicePanel() {
-  const [devices, setDevices] = useState<NetworkDeviceRecord[]>([])
-  const [loadingDevices, setLoadingDevices] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
-  const [testingDeviceId, setTestingDeviceId] = useState<string | null>(null)
-  const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null)
-  const [isDeviceModalOpen, setIsDeviceModalOpen] = useState(false)
-  const [message, setMessage] = useState('')
-  const [messageType, setMessageType] = useState<'success' | 'error'>('success')
-
-  const [name, setName] = useState('')
-  const [type, setType] = useState<NetworkDeviceRecord['type']>('MIKROTIK')
-  const [host, setHost] = useState('')
-  const [port, setPort] = useState('8728')
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [brand, setBrand] = useState('MikroTik')
-  const [model, setModel] = useState('RouterOS')
-  const [notes, setNotes] = useState('')
-  const [isActive, setIsActive] = useState(true)
-
-  const sortedDevices = useMemo(() => {
-    return [...devices].sort((a, b) => {
-      if (a.type !== b.type) return a.type.localeCompare(b.type)
-      return a.name.localeCompare(b.name)
-    })
-  }, [devices])
-
-  const activeCount = devices.filter((device) => device.isActive).length
-  const mikrotikCount = devices.filter((device) => device.type === 'MIKROTIK').length
-  const oltCount = devices.filter((device) => device.type === 'OLT').length
-
-  const resetForm = useCallback(() => {
-    setEditingDeviceId(null)
-    setName('')
-    setType('MIKROTIK')
-    setHost('')
-    setPort('8728')
-    setUsername('')
-    setPassword('')
-    setBrand('MikroTik')
-    setModel('RouterOS')
-    setNotes('')
-    setIsActive(true)
-    setIsDeviceModalOpen(false)
-  }, [])
-
-  const refreshDevices = useCallback(async () => {
-    try {
-      setLoadingDevices(true)
-      const response = await fetch(`${API_BASE_URL}/api/network-devices`, {
-        headers: getAuthorizedHeaders(),
-      })
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.message || 'Gagal mengambil perangkat monitoring')
-      }
-
-      setDevices(data.devices || [])
-    } catch (error) {
-      setMessageType('error')
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : 'Terjadi kesalahan saat mengambil perangkat monitoring.',
-      )
-    } finally {
-      setLoadingDevices(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void refreshDevices()
-    }, 0)
-
-    return () => window.clearTimeout(timer)
-  }, [refreshDevices])
-
-  function handleOpenAddModal() {
-    resetForm()
-    setIsDeviceModalOpen(true)
-  }
-
-  function handleTypeChange(nextType: NetworkDeviceRecord['type']) {
-    setType(nextType)
-
-    if (!editingDeviceId) {
-      if (nextType === 'MIKROTIK') {
-        setPort('8728')
-        setUsername('')
-        setPassword('')
-        setBrand('MikroTik')
-        setModel('RouterOS')
-      } else {
-        setPort('161')
-        setUsername('snmp')
-        setPassword('public')
-        setBrand('ZTE')
-        setModel('C320')
-      }
-    }
-  }
-
-  function handleEditDevice(device: NetworkDeviceRecord) {
-    setEditingDeviceId(device.id)
-    setName(device.name)
-    setType(device.type)
-    setHost(device.host)
-    setPort(String(device.port))
-    setUsername(device.username)
-    setPassword('')
-    setBrand(device.brand || '')
-    setModel(device.model || '')
-    setNotes(device.notes || '')
-    setIsActive(device.isActive)
-    setMessage('')
-    setIsDeviceModalOpen(true)
-  }
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setMessage('')
-
-    const cleanName = name.trim()
-    const cleanHost = host.trim()
-    const cleanUsername = type === 'OLT' ? (username.trim() || 'snmp') : username.trim()
-    const cleanPassword = password.trim()
-    const parsedPort = Number(port)
-
-    if (!cleanName) {
-      setMessageType('error')
-      setMessage('Nama perangkat wajib diisi.')
-      return
-    }
-
-    if (!cleanHost) {
-      setMessageType('error')
-      setMessage('Host/IP perangkat wajib diisi.')
-      return
-    }
-
-    if (!Number.isInteger(parsedPort) || parsedPort <= 0 || parsedPort > 65535) {
-      setMessageType('error')
-      setMessage('Port harus berupa angka 1 sampai 65535.')
-      return
-    }
-
-    if (type === 'MIKROTIK' && !cleanUsername) {
-      setMessageType('error')
-      setMessage('Username MikroTik wajib diisi.')
-      return
-    }
-
-    if (!editingDeviceId && !cleanPassword) {
-      setMessageType('error')
-      setMessage(
-        type === 'OLT'
-          ? 'SNMP Community wajib diisi (misal: public).'
-          : 'Password perangkat wajib diisi.',
-      )
-      return
-    }
-
-    try {
-      setSubmitting(true)
-      const response = await fetch(
-        editingDeviceId
-          ? `${API_BASE_URL}/api/network-devices/${editingDeviceId}`
-          : `${API_BASE_URL}/api/network-devices`,
-        {
-          method: editingDeviceId ? 'PATCH' : 'POST',
-          headers: getAuthorizedHeaders(true),
-          body: JSON.stringify({
-            name: cleanName,
-            type,
-            host: cleanHost,
-            port: parsedPort,
-            username: cleanUsername,
-            ...(cleanPassword ? { password: cleanPassword } : {}),
-            brand: brand.trim() || null,
-            model: model.trim() || null,
-            notes: notes.trim() || null,
-            isActive,
-          }),
-        },
-      )
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.message || 'Gagal menyimpan perangkat monitoring')
-      }
-
-      setMessageType('success')
-      setMessage(data.message || 'Perangkat monitoring berhasil disimpan.')
-      resetForm()
-      await refreshDevices()
-    } catch (error) {
-      setMessageType('error')
-      setMessage(error instanceof Error ? error.message : 'Terjadi kesalahan.')
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  async function handleDeleteDevice(device: NetworkDeviceRecord) {
-    const confirmed = window.confirm(
-      `Hapus/nonaktifkan perangkat ${device.name}?\n\nJika perangkat masih dipakai client, gunakan edit lalu nonaktifkan agar riwayat tetap aman.`,
-    )
-
-    if (!confirmed) return
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/network-devices/${device.id}`, {
-        method: 'DELETE',
-        headers: getAuthorizedHeaders(),
-      })
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.message || 'Gagal menghapus perangkat monitoring')
-      }
-
-      setMessageType('success')
-      setMessage(data.message || 'Perangkat monitoring berhasil dihapus.')
-      await refreshDevices()
-    } catch (error) {
-      setMessageType('error')
-      setMessage(error instanceof Error ? error.message : 'Terjadi kesalahan.')
-    }
-  }
-
-  async function handleTestDevice(device: NetworkDeviceRecord) {
-    try {
-      setTestingDeviceId(device.id)
-      setMessage('')
-
-      const response = await fetch(
-        `${API_BASE_URL}/api/network-devices/${device.id}/test`,
-        {
-          method: 'POST',
-          headers: getAuthorizedHeaders(true),
-        },
-      )
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.message || 'Gagal test koneksi perangkat')
-      }
-
-      setMessageType(data.success ? 'success' : 'error')
-      setMessage(data.message || 'Test koneksi selesai.')
-      await refreshDevices()
-    } catch (error) {
-      setMessageType('error')
-      setMessage(error instanceof Error ? error.message : 'Terjadi kesalahan saat test koneksi.')
-    } finally {
-      setTestingDeviceId(null)
-    }
-  }
-
-  return (
-    <div className="network-device-panel">
-      <div className="device-summary-grid">
-        <div>
-          <span>Total</span>
-          <strong>{devices.length}</strong>
-        </div>
-        <div>
-          <span>Aktif</span>
-          <strong>{activeCount}</strong>
-        </div>
-        <div>
-          <span>MikroTik</span>
-          <strong>{mikrotikCount}</strong>
-        </div>
-        <div>
-          <span>OLT (SNMP)</span>
-          <strong>{oltCount}</strong>
-        </div>
-      </div>
-
-      <button
-        type="button"
-        className="add-device-main-btn"
-        onClick={handleOpenAddModal}
-        style={{
-          width: '100%',
-          padding: '10px',
-          borderRadius: '10px',
-          border: 'none',
-          background: '#16a34a',
-          color: '#ffffff',
-          fontWeight: 'bold',
-          cursor: 'pointer',
-        }}
-      >
-        + Tambah Perangkat
-      </button>
-
-      {message && (
-        <div className={`admin-panel-message ${messageType}`}>
-          {message}
-        </div>
-      )}
-
-      {/* POPUP / MODAL FORM PERANGKAT (ADD & EDIT) */}
-      {isDeviceModalOpen && (
-        <div className="app-modal-backdrop">
-          <div className="app-modal app-modal-form">
-            <div className="app-modal-header">
-              <div>
-                <h2>{editingDeviceId ? 'Edit Perangkat' : 'Tambah Perangkat'}</h2>
-                <p>
-                  {type === 'OLT'
-                    ? 'Koneksi OLT via SNMP UDP Port 161'
-                    : 'Koneksi MikroTik via RouterOS API Port 8728'}
-                </p>
-              </div>
-              <button type="button" className="app-modal-close" onClick={resetForm}>
-                ×
-              </button>
-            </div>
-
-            <form className="device-form" onSubmit={handleSubmit} style={{ padding: '14px' }}>
-              <label>Jenis Perangkat</label>
-              <select
-                value={type}
-                onChange={(event) =>
-                  handleTypeChange(event.target.value as NetworkDeviceRecord['type'])
-                }
-              >
-                <option value="MIKROTIK">MikroTik (RouterOS API)</option>
-                <option value="OLT">OLT (SNMP v2c)</option>
-              </select>
-
-              <label>Nama Perangkat</label>
-              <input
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder={type === 'OLT' ? 'Contoh: OLT ZTE Balen Central' : 'Contoh: MikroTik Mayang Kawis'}
-              />
-
-              <div className="device-form-row">
-                <label>
-                  Host / IP
-                  <input
-                    value={host}
-                    onChange={(event) => setHost(event.target.value)}
-                    placeholder="10.103.99.45"
-                  />
-                </label>
-                <label>
-                  Port
-                  <input
-                    value={port}
-                    onChange={(event) => setPort(event.target.value)}
-                    placeholder={type === 'MIKROTIK' ? '8728' : '161'}
-                    inputMode="numeric"
-                  />
-                </label>
-              </div>
-
-              {type === 'MIKROTIK' ? (
-                <>
-                  <label>Username</label>
-                  <input
-                    value={username}
-                    onChange={(event) => setUsername(event.target.value)}
-                    placeholder="Username API MikroTik"
-                  />
-
-                  <label>Password</label>
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                    placeholder={
-                      editingDeviceId
-                        ? 'Kosongkan jika tidak ingin mengganti password'
-                        : 'Password akun MikroTik'
-                    }
-                  />
-                </>
-              ) : (
-                <>
-                  <label>SNMP Community (Read-Only)</label>
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                    placeholder={
-                      editingDeviceId
-                        ? 'Kosongkan jika tidak ingin mengubah community'
-                        : 'Default: public'
-                    }
-                  />
-                  <small style={{ color: '#94a3b8', fontSize: '11px', marginTop: '-4px' }}>
-                    Community string yang diset di OLT untuk hak akses snmpwalk/get.
-                  </small>
-                </>
-              )}
-
-              <div className="device-form-row">
-                <label>
-                  Brand
-                  <input
-                    value={brand}
-                    onChange={(event) => setBrand(event.target.value)}
-                    placeholder={type === 'OLT' ? 'ZTE / Huawei / HSGQ' : 'MikroTik'}
-                  />
-                </label>
-                <label>
-                  Model
-                  <input
-                    value={model}
-                    onChange={(event) => setModel(event.target.value)}
-                    placeholder={type === 'OLT' ? 'C320 / C300' : 'RouterOS'}
-                  />
-                </label>
-              </div>
-
-              <label>Catatan</label>
-              <textarea
-                value={notes}
-                onChange={(event) => setNotes(event.target.value)}
-                placeholder="Catatan lokasi atau konfigurasi"
-                rows={2}
-              />
-
-              <label className="device-checkbox-row">
-                <input
-                  type="checkbox"
-                  checked={isActive}
-                  onChange={(event) => setIsActive(event.target.checked)}
-                />
-                Perangkat aktif dipakai monitoring
-              </label>
-
-              <button type="submit" disabled={submitting}>
-                {submitting
-                  ? 'Menyimpan...'
-                  : editingDeviceId
-                    ? 'Simpan Perubahan'
-                    : 'Tambah Perangkat'}
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* DAFTAR PERANGKAT DI SIDEBAR */}
-      <div className="device-list-card">
-        <div className="device-list-header">
-          <h3>Daftar Perangkat</h3>
-          <button type="button" onClick={() => void refreshDevices()} disabled={loadingDevices}>
-            {loadingDevices ? 'Memuat...' : 'Refresh'}
-          </button>
-        </div>
-
-        {sortedDevices.length === 0 ? (
-          <p className="admin-empty-state">Belum ada MikroTik atau OLT terdaftar.</p>
-        ) : (
-          <div className="device-list">
-            {sortedDevices.map((device) => (
-              <div className="device-card" key={device.id}>
-                <div className="device-card-top">
-                  <div>
-                    <strong>{device.name}</strong>
-                    <span>
-                      {device.type === 'OLT' ? 'OLT (SNMP)' : 'MikroTik (API)'} • {device.host}:{device.port}
-                    </span>
-                  </div>
-                  <span
-                    className={`device-status-pill status-${device.connectionStatus.toLowerCase()}`}
-                  >
-                    {getDeviceStatusLabel(device.connectionStatus)}
-                  </span>
-                </div>
-
-                <div className="device-meta-grid">
-                  {device.type === 'MIKROTIK' ? (
-                    <>
-                      <span>User: <b>{device.username}</b></span>
-                      <span>Password: <b>{device.hasPassword ? 'Tersimpan' : 'Belum ada'}</b></span>
-                    </>
-                  ) : (
-                    <span>Community: <b>{device.hasPassword ? 'Tersimpan' : 'public'}</b></span>
-                  )}
-                  <span>Brand: <b>{device.brand || '-'}</b></span>
-                  <span>Model: <b>{device.model || '-'}</b></span>
-                  <span>Aktif: <b>{device.isActive ? 'Ya' : 'Tidak'}</b></span>
-                  <span>Terakhir: <b>{device.lastConnectedAt ? new Date(device.lastConnectedAt).toLocaleString('id-ID') : '-'}</b></span>
-                </div>
-
-                {device.lastConnectionMessage && (
-                  <p className="device-message">{device.lastConnectionMessage}</p>
-                )}
-
-                <div className="device-card-actions">
-                  <button type="button" onClick={() => handleEditDevice(device)}>
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleTestDevice(device)}
-                    disabled={testingDeviceId === device.id}
-                  >
-                    {testingDeviceId === device.id ? 'Testing...' : 'Test'}
-                  </button>
-                  <button
-                    type="button"
-                    className="danger"
-                    onClick={() => void handleDeleteDevice(device)}
-                  >
-                    Hapus
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
 function getHistoryRowClass(status: string) {
   if (status === 'ONLINE') return 'history-row-online'
   if (status === 'OFFLINE') return 'history-row-offline'
@@ -1152,6 +598,7 @@ function getHistoryRowClass(status: string) {
 export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
   const [nodes, setNodes] = useState<NetworkNode[]>([])
   const [cables, setCables] = useState<Cable[]>([])
+  const [devices, setDevices] = useState<Device[]>([])
   const [faultAlerts, setFaultAlerts] = useState<FaultAlert[]>([])
   const [selectedFaultAlert, setSelectedFaultAlert] =
     useState<FaultAlert | null>(null)
@@ -1187,6 +634,8 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
   const [isAddNodeModalOpen, setIsAddNodeModalOpen] = useState(false)
   const [isAddClientModalOpen, setIsAddClientModalOpen] = useState(false)
   const [isAddCableModalOpen, setIsAddCableModalOpen] = useState(false)
+  const [isDeviceModalOpen, setIsDeviceModalOpen] = useState(false)
+
   const [cableFromNodeId, setCableFromNodeId] = useState('')
   const [cableToNodeId, setCableToNodeId] = useState('')
   const [cableFromSearch, setCableFromSearch] = useState('')
@@ -1351,6 +800,90 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
     }
   }, [])
 
+  const refreshDevices = useCallback(async () => {
+    if (!canManageUsers) return
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/network-devices`, {
+        headers: getAuthorizedHeaders(),
+      })
+      const data = await response.json()
+      if (response.ok) {
+        setDevices(data.devices || [])
+      }
+    } catch (error) {
+      console.error('Gagal mengambil perangkat:', error)
+    }
+  }, [canManageUsers])
+
+  const handleTestDevice = async (deviceId: number) => {
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/network-devices/${deviceId}/test`,
+        {
+          method: 'POST',
+          headers: getAuthorizedHeaders(true),
+        },
+      )
+      const data = await response.json()
+      alert(data.message || (data.success ? 'Koneksi Berhasil' : 'Koneksi Gagal'))
+      await refreshDevices()
+    } catch (error: unknown) {
+      const errMessage = error instanceof Error ? error.message : String(error)
+      alert(`Error test koneksi: ${errMessage}`)
+    }
+  }
+
+  const handleDeleteDevice = async (deviceId: number) => {
+    const confirmed = window.confirm('Yakin ingin menghapus perangkat monitoring ini?')
+    if (!confirmed) return
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/network-devices/${deviceId}`, {
+        method: 'DELETE',
+        headers: getAuthorizedHeaders(),
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.message || 'Gagal menghapus perangkat')
+      }
+      alert('Perangkat monitoring berhasil dihapus.')
+      await refreshDevices()
+    } catch (error: unknown) {
+      const errMessage = error instanceof Error ? error.message : String(error)
+      alert(errMessage || 'Gagal menghapus perangkat')
+    }
+  }
+
+  const handleSaveDevice = async (deviceData: {
+    name: string
+    type: string
+    host: string
+    port: number
+    username?: string
+    password?: string
+  }) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/network-devices`, {
+        method: 'POST',
+        headers: getAuthorizedHeaders(true),
+        body: JSON.stringify({
+          ...deviceData,
+          isActive: true,
+        }),
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.message || 'Gagal menyimpan perangkat')
+      }
+      alert('Perangkat monitoring berhasil ditambahkan.')
+      await refreshDevices()
+    } catch (error: unknown) {
+      const errMessage = error instanceof Error ? error.message : String(error)
+      alert(errMessage || 'Gagal menyimpan perangkat')
+      throw error
+}
+  }
+
   const showStatusNotification = useCallback((node: NetworkNode) => {
     const notificationId = `${node.id}-${node.status}-${Date.now()}`
 
@@ -1405,6 +938,8 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
           },
           {},
         )
+
+        void refreshDevices()
       } catch (err) {
         console.error(err)
         setError('Backend belum bisa diakses atau API bermasalah')
@@ -1414,7 +949,7 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
     }
 
     loadInitialData()
-  }, [getFaultAlerts])
+  }, [getFaultAlerts, refreshDevices])
 
   useEffect(() => {
     socket.on('connect', () => {
@@ -2606,25 +2141,9 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
             >
               Stats
             </button>
-
-            {canManageUsers && (
-              <button
-                type="button"
-                className={activePanel === 'devices' ? 'active' : ''}
-                onClick={() => setActivePanel('devices')}
-              >
-                Device
-              </button>
-            )}
           </div>
 
           <div className="sidebar-panel">
-            {activePanel === 'devices' && canManageUsers && (
-              <div className="sidebar-section">
-                <NetworkDevicePanel />
-              </div>
-            )}
-
             {activePanel === 'search' && (
               <div className="sidebar-section">
                 <div className="search-panel">
@@ -3283,6 +2802,18 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
         <AdminPanel onClose={() => setIsAdminPanelOpen(false)} />
       )}
 
+      {isDeviceModalOpen && canManageUsers && (
+        <DeviceModal
+          isOpen={isDeviceModalOpen}
+          onClose={() => setIsDeviceModalOpen(false)}
+          devices={devices}
+          onRefresh={refreshDevices}
+          onTestDevice={handleTestDevice}
+          onDeleteDevice={handleDeleteDevice}
+          onSaveDevice={handleSaveDevice}
+        />
+      )}
+
       {isHistoryModalOpen && (
         <div className="app-modal-backdrop">
           <div className="app-modal history-modal">
@@ -3391,10 +2922,7 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
           {canManageUsers && (
             <button
               type="button"
-              onClick={() => {
-                setIsSidebarCollapsed(false)
-                setActivePanel('devices')
-              }}
+              onClick={() => setIsDeviceModalOpen(true)}
             >
               Device
             </button>
