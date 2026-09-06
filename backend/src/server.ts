@@ -1089,16 +1089,39 @@ app.post('/api/olt/check-onu', requireEditAccess, async (req, res) => {
   try {
     const onuInterface = String(req.body.onuInterface || '').trim()
     const nodeId = req.body.nodeId ? String(req.body.nodeId).trim() : null
+    const oltDeviceId = req.body.oltDeviceId ? String(req.body.oltDeviceId).trim() : null
 
     if (!onuInterface) {
       res.status(400).json({
         success: false,
-        message: 'onuInterface wajib diisi. Contoh: gpon-onu_1/1/1:11',
+        message: 'onuInterface wajib diisi. Contoh: gpon-onu_1/2/3:11',
       })
       return
     }
 
-    const result = await checkZteC320Onu(onuInterface)
+    // Ambil host & community dari device OLT yang dipilih
+    let oltHost = process.env.OLT_HOST || '136.2.2.200'
+    let oltPort = Number(process.env.OLT_PORT || 161)
+    let oltCommunity = process.env.OLT_COMMUNITY || 'public'
+
+    if (oltDeviceId) {
+      const device = await prisma.networkDevice.findUnique({
+        where: { id: oltDeviceId },
+      })
+      if (device) {
+        oltHost = device.host
+        oltPort = device.port || 161
+        oltCommunity = decryptSecret(device.passwordEncrypted) || 'public'
+      }
+    }
+
+    // Panggil checkZteC320Onu dengan parameter host & community
+    const result = await checkZteC320Onu(onuInterface, {
+      host: oltHost,
+      port: oltPort,
+      community: oltCommunity,
+    })
+
     const rxWarningLimit = Number(process.env.OLT_RX_WARNING_DBM || -27)
 
     let mappedNodeStatus: NodeStatus = 'UNKNOWN'
@@ -1120,73 +1143,32 @@ app.post('/api/olt/check-onu', requireEditAccess, async (req, res) => {
 
     if (nodeId) {
       const existingNode = await prisma.node.findUnique({
-        where: {
-          id: nodeId,
-        },
+        where: { id: nodeId },
       })
 
-      if (!existingNode) {
-        res.status(404).json({
-          success: false,
-          message: 'Node client tidak ditemukan.',
-        })
-        return
-      }
-
-      updatedNode = await prisma.node.update({
-        where: {
-          id: nodeId,
-        },
-        data: {
-          status: mappedNodeStatus,
-          monitoringMethod: 'OLT',
-          monitoringEnabled: true,
-          onuInterface: result.onuInterface,
-          onuStatus: result.onuStatus,
-          onuRxPower: result.onuRxPower,
-          onuLastCheckedAt: new Date(),
-          rxPower: result.onuRxPower,
-          lastCheckedAt: new Date(),
-          lastSeenAt: mappedNodeStatus === 'ONLINE' ? new Date() : existingNode.lastSeenAt,
-          offlineSince:
-            mappedNodeStatus === 'OFFLINE'
-              ? existingNode.offlineSince || new Date()
-              : null,
-        },
-      })
-
-      io.emit('node-status-updated', updatedNode)
-
-      if (existingNode.status !== updatedNode.status) {
-        await createMonitoringLog({
-          nodeId: updatedNode.id,
-          eventType: getMonitoringLogEventType(updatedNode.status),
-          oldStatus: existingNode.status,
-          newStatus: updatedNode.status,
-          title:
-            updatedNode.status === 'ONLINE'
-              ? 'ONU ONLINE'
-              : updatedNode.status === 'OFFLINE'
-                ? 'ONU OFFLINE'
-                : updatedNode.status === 'WARNING'
-                  ? 'ONU WARNING'
-                  : 'ONU UNKNOWN',
-          message:
-            updatedNode.status === 'ONLINE'
-              ? `${updatedNode.name} online dari SNMP OLT.`
-              : updatedNode.status === 'OFFLINE'
-                ? `${updatedNode.name} offline/LOS dari SNMP OLT.`
-                : updatedNode.status === 'WARNING'
-                  ? `${updatedNode.name} warning dari SNMP OLT. RX ${result.onuRxPower ?? '-'} dBm.`
-                  : `${updatedNode.name} status SNMP OLT tidak diketahui.`,
-          metadata: {
-            source: 'OLT_ZTE_C320_SNMP_MANUAL_CHECK',
+      if (existingNode) {
+        updatedNode = await prisma.node.update({
+          where: { id: nodeId },
+          data: {
+            status: mappedNodeStatus,
+            monitoringMethod: 'OLT',
+            monitoringEnabled: true,
+            oltDeviceId: oltDeviceId || existingNode.oltDeviceId,
             onuInterface: result.onuInterface,
             onuStatus: result.onuStatus,
             onuRxPower: result.onuRxPower,
-            rawStatusText: result.rawStatusText,
+            onuLastCheckedAt: new Date(),
+            rxPower: result.onuRxPower,
+            lastCheckedAt: new Date(),
+            lastSeenAt: mappedNodeStatus === 'ONLINE' ? new Date() : existingNode.lastSeenAt,
+            offlineSince:
+              mappedNodeStatus === 'OFFLINE'
+                ? existingNode.offlineSince || new Date()
+                : null,
           },
         })
+
+        io.emit('node-status-updated', updatedNode)
       }
     }
 
