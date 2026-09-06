@@ -815,7 +815,7 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
     }
   }, [canManageUsers])
 
-  const handleTestDevice = async (deviceId: number) => {
+  const handleTestDevice = async (deviceId: string | number) => {
     try {
       const response = await fetch(
         `${API_BASE_URL}/api/network-devices/${deviceId}/test`,
@@ -825,18 +825,19 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
         },
       )
       const data = await response.json()
-      alert(data.message || (data.success ? 'Koneksi Berhasil' : 'Koneksi Gagal'))
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'Koneksi Gagal')
+      }
       await refreshDevices()
     } catch (error: unknown) {
       const errMessage = error instanceof Error ? error.message : String(error)
-      alert(`Error test koneksi: ${errMessage}`)
+      const wrappedError = new Error(errMessage || 'Error test koneksi')
+      Object.assign(wrappedError, { cause: error })
+      throw wrappedError
     }
   }
 
-  const handleDeleteDevice = async (deviceId: number) => {
-    const confirmed = window.confirm('Yakin ingin menghapus perangkat monitoring ini?')
-    if (!confirmed) return
-
+  const handleDeleteDevice = async (deviceId: string | number) => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/network-devices/${deviceId}`, {
         method: 'DELETE',
@@ -846,25 +847,36 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
       if (!response.ok) {
         throw new Error(data.message || 'Gagal menghapus perangkat')
       }
-      alert('Perangkat monitoring berhasil dihapus.')
       await refreshDevices()
     } catch (error: unknown) {
       const errMessage = error instanceof Error ? error.message : String(error)
-      alert(errMessage || 'Gagal menghapus perangkat')
+      const wrappedError = new Error(errMessage || 'Gagal menghapus perangkat')
+      Object.assign(wrappedError, { cause: error })
+      throw wrappedError
     }
   }
 
   const handleSaveDevice = async (deviceData: {
+    id?: string | number
     name: string
     type: string
     host: string
     port: number
     username?: string
     password?: string
+    brand?: string
+    model?: string
+    notes?: string
+    isActive?: boolean
   }) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/network-devices`, {
-        method: 'POST',
+      const isEditing = Boolean(deviceData.id)
+      const url = isEditing
+        ? `${API_BASE_URL}/api/network-devices/${deviceData.id}`
+        : `${API_BASE_URL}/api/network-devices`
+
+      const response = await fetch(url, {
+        method: isEditing ? 'PATCH' : 'POST',
         headers: getAuthorizedHeaders(true),
         body: JSON.stringify({
           ...deviceData,
@@ -875,12 +887,12 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
       if (!response.ok) {
         throw new Error(data.message || 'Gagal menyimpan perangkat')
       }
-      alert('Perangkat monitoring berhasil ditambahkan.')
       await refreshDevices()
     } catch (error: unknown) {
       const errMessage = error instanceof Error ? error.message : String(error)
-      alert(errMessage || 'Gagal menyimpan perangkat')
-      throw error
+      const wrappedError = new Error(errMessage || 'Gagal menyimpan perangkat')
+      Object.assign(wrappedError, { cause: error })
+      throw wrappedError
     }
   }
 
