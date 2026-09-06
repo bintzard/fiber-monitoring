@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 
 export interface Device {
-  id: number;
+  id: string;
   name: string;
   type: 'MIKROTIK' | 'OLT_ZTE' | 'OLT';
   host: string;
@@ -19,10 +19,10 @@ interface DeviceModalProps {
   onClose: () => void;
   devices: Device[];
   onRefresh: () => void;
-  onTestDevice: (id: number) => Promise<void>;
-  onDeleteDevice: (id: number) => Promise<void>;
+  onTestDevice: (id: string) => Promise<void>;
+  onDeleteDevice: (id: string) => Promise<void>;
   onSaveDevice: (data: {
-    id?: number;
+    id?: string;
     name: string;
     type: string;
     host: string;
@@ -45,7 +45,7 @@ export const DeviceModal: React.FC<DeviceModalProps> = ({
   onDeleteDevice,
   onSaveDevice,
 }) => {
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [type, setType] = useState<'OLT' | 'MIKROTIK'>('OLT');
   const [host, setHost] = useState('');
@@ -56,16 +56,15 @@ export const DeviceModal: React.FC<DeviceModalProps> = ({
   const [model, setModel] = useState('C320');
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [testingId, setTestingId] = useState<number | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
 
-  // State untuk Notifikasi Kustom (Pengganti alert())
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   if (!isOpen) return null;
 
-  const showToast = (message: string, type: 'success' | 'error') => {
-    setNotification({ message, type });
-    setTimeout(() => setNotification(null), 4000); // Hilang otomatis dalam 4 detik
+  const showToast = (message: string, toastType: 'success' | 'error') => {
+    setNotification({ message, type: toastType });
+    setTimeout(() => setNotification(null), 4000);
   };
 
   const handleTypeChange = (nextType: 'OLT' | 'MIKROTIK') => {
@@ -83,7 +82,7 @@ export const DeviceModal: React.FC<DeviceModalProps> = ({
   };
 
   const handleStartEdit = (d: Device) => {
-    setEditingId(d.id);
+    setEditingId(String(d.id));
     setName(d.name);
     const normalizedType = d.type.includes('OLT') ? 'OLT' : 'MIKROTIK';
     setType(normalizedType);
@@ -114,7 +113,7 @@ export const DeviceModal: React.FC<DeviceModalProps> = ({
     setSubmitting(true);
     try {
       await onSaveDevice({
-        id: editingId !== null ? editingId : undefined,
+        id: editingId || undefined,
         name: name.trim(),
         type,
         host: host.trim(),
@@ -125,7 +124,7 @@ export const DeviceModal: React.FC<DeviceModalProps> = ({
         model: model.trim(),
         notes: notes.trim(),
       });
-      showToast(editingId !== null ? 'Perubahan perangkat berhasil disimpan.' : 'Perangkat baru berhasil ditambahkan.', 'success');
+      showToast(editingId ? 'Perubahan perangkat berhasil disimpan.' : 'Perangkat baru berhasil ditambahkan.', 'success');
       handleCancelEdit();
     } catch (err: unknown) {
       const errMessage = err instanceof Error ? err.message : String(err);
@@ -135,7 +134,7 @@ export const DeviceModal: React.FC<DeviceModalProps> = ({
     }
   };
 
-  const handleTest = async (id: number) => {
+  const handleTest = async (id: string) => {
     setTestingId(id);
     try {
       await onTestDevice(id);
@@ -148,7 +147,7 @@ export const DeviceModal: React.FC<DeviceModalProps> = ({
     }
   };
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = async (id: string) => {
     const confirmed = window.confirm('Yakin ingin menghapus perangkat monitoring ini?');
     if (!confirmed) return;
 
@@ -175,9 +174,9 @@ export const DeviceModal: React.FC<DeviceModalProps> = ({
           </button>
         </div>
 
-        <div style={{ padding: '20px', maxHeight: '75vh', overflowY: 'auto', position: 'relative' }}>
+        <div style={{ padding: '20px', maxHeight: '75vh', overflowY: 'auto' }}>
           
-          {/* Custom Toast Notification */}
+          {/* Notifikasi Toast */}
           {notification && (
             <div style={{
               padding: '12px 16px',
@@ -202,13 +201,13 @@ export const DeviceModal: React.FC<DeviceModalProps> = ({
             </div>
           )}
 
-          {/* SECTION: FORM TAMBAH / EDIT PERANGKAT */}
+          {/* Form Tambah / Edit */}
           <div style={{ background: 'rgba(15, 23, 42, 0.6)', border: '1px solid #334155', borderRadius: '12px', padding: '16px', marginBottom: '24px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <h3 style={{ color: '#fff', fontSize: '14px', margin: 0 }}>
-                {editingId !== null ? `Edit Perangkat: ${name}` : '+ Tambah Gateway Baru'}
+                {editingId ? `Edit Perangkat: ${name}` : '+ Tambah Gateway Baru'}
               </h3>
-              {editingId !== null && (
+              {editingId && (
                 <button
                   type="button"
                   onClick={handleCancelEdit}
@@ -272,10 +271,10 @@ export const DeviceModal: React.FC<DeviceModalProps> = ({
 
               <label>
                 {type === 'OLT' ? 'SNMP Community (Read-Only)' : 'Password API'}
-                {editingId !== null && <span style={{ color: '#94a3b8', fontWeight: 'normal' }}> (Kosongkan jika tidak diubah)</span>}
+                {editingId && <span style={{ color: '#94a3b8', fontWeight: 'normal' }}> (Kosongkan jika tidak diubah)</span>}
               </label>
               <input
-                required={editingId === null}
+                required={!editingId}
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -301,13 +300,13 @@ export const DeviceModal: React.FC<DeviceModalProps> = ({
                 </label>
               </div>
 
-              <button type="submit" disabled={submitting} style={{ marginTop: '14px', background: editingId !== null ? '#0284c7' : '#2563eb' }}>
-                {submitting ? 'Menyimpan...' : editingId !== null ? 'Simpan Perubahan' : 'Simpan Perangkat'}
+              <button type="submit" disabled={submitting} style={{ marginTop: '14px', background: editingId ? '#0284c7' : '#2563eb' }}>
+                {submitting ? 'Menyimpan...' : editingId ? 'Simpan Perubahan' : 'Simpan Perangkat'}
               </button>
             </form>
           </div>
 
-          {/* SECTION: DAFTAR PERANGKAT */}
+          {/* Daftar Gateway */}
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <h3 style={{ color: '#fff', fontSize: '14px', margin: 0 }}>Daftar Gateway ({devices.length})</h3>
@@ -340,7 +339,7 @@ export const DeviceModal: React.FC<DeviceModalProps> = ({
                     </tr>
                   ) : (
                     devices.map((d) => (
-                      <tr key={d.id} style={{ borderBottom: '1px solid #1e293b' }}>
+                      <tr key={String(d.id)} style={{ borderBottom: '1px solid #1e293b' }}>
                         <td style={{ padding: '12px', color: '#fff', fontWeight: 600 }}>{d.name}</td>
                         <td style={{ padding: '12px', color: '#cbd5e1' }}>{d.brand || d.type}</td>
                         <td style={{ padding: '12px', fontFamily: 'monospace', color: '#38bdf8' }}>{d.host}:{d.port}</td>
@@ -360,15 +359,15 @@ export const DeviceModal: React.FC<DeviceModalProps> = ({
                             </button>
                             <button
                               type="button"
-                              disabled={testingId === Number(d.id)}
-                              onClick={() => handleTest(Number(d.id))}
+                              disabled={testingId === String(d.id)}
+                              onClick={() => handleTest(String(d.id))}
                               style={{ padding: '5px 10px', background: '#059669', color: '#fff', border: 'none', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', fontWeight: 500 }}
                             >
-                              {testingId === Number(d.id) ? '...' : 'Test'}
+                              {testingId === String(d.id) ? '...' : 'Test'}
                             </button>
                             <button
                               type="button"
-                              onClick={() => handleDelete(Number(d.id))}
+                              onClick={() => handleDelete(String(d.id))}
                               style={{ padding: '5px 10px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '4px', fontSize: '11px', cursor: 'pointer', fontWeight: 500 }}
                             >
                               Hapus
