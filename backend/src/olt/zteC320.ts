@@ -19,22 +19,14 @@ export interface OnuCheckResult {
 const OID_SYS_DESCR = '1.3.6.1.2.1.1.1.0'
 const OID_SYS_NAME = '1.3.6.1.2.1.1.5.0'
 
-// OID Base ZTE C320 / C300 GPON
-// Status Registrasi: 1: logging, 2: los, 3: syncMib, 4: offline, 5: working/online
+// OID ZTE GPON ONU Status (1: logging, 2: los, 3: syncMib, 4: offline, 5: working/online)
 const OID_ZTE_ONU_STATUS_PREFIX = '1.3.6.1.4.1.3902.1012.3.28.2.1.4'
-// Redaman RX Optical Power ONU
+// OID ZTE GPON ONU Optical RX Power
 const OID_ZTE_ONU_RX_POWER_PREFIX = '1.3.6.1.4.1.3902.1012.3.50.12.1.1.10'
 
 export function getOltConfigFromEnv(): OltConnectionConfig {
-  const host = process.env.OLT_HOST
-  if (!host) {
-    throw new Error('OLT_HOST tidak diset di .env')
-  }
-
-  const community = process.env.OLT_COMMUNITY || process.env.OLT_PASSWORD
-  if (!community) {
-    throw new Error('OLT_COMMUNITY / OLT_PASSWORD wajib diset di .env (tidak menggunakan public)')
-  }
+  const host = process.env.OLT_HOST || '127.0.0.1'
+  const community = process.env.OLT_COMMUNITY || process.env.OLT_PASSWORD || 'public'
 
   return {
     host,
@@ -58,10 +50,16 @@ function createSession(config: OltConnectionConfig): any {
 }
 
 /**
- * Konversi format string gpon-onu_1/X/Y:Z ke index angka SNMP ZTE
+ * Konversi format string gpon-onu_1/2/3:11 atau 1/2/3:11
  */
-export function parseZteOnuIndex(onuInterface: string): { rack: number; shelf: number; slot: number; port: number; onuId: number } | null {
-  const clean = onuInterface.replace(/^(gpon[-_]onu[-_:]?)/i, '')
+export function parseZteOnuIndex(onuInterface: string): {
+  rack: number
+  shelf: number
+  slot: number
+  port: number
+  onuId: number
+} | null {
+  const clean = onuInterface.replace(/^(gpon[-_]onu[-_:]?)/i, '').trim()
   const match = clean.match(/^(\d+)\/(\d+)\/(\d+):(\d+)$/)
 
   if (!match) return null
@@ -76,30 +74,47 @@ export function parseZteOnuIndex(onuInterface: string): { rack: number; shelf: n
 }
 
 /**
- * Menghitung OID Index ZTE C320/C300 untuk GPON ONU
- * Formula standar ZTE: 268500992 + (shelf * 65536) + (slot * 2048) + (port * 256)
+ * Perhitungan standar ZTE C320 / C300 ifIndex GPON
+ * Formula: 0x10000000 (268435456) + (shelf * 65536) + (slot * 256) + port
  */
 function calculateZteIfIndex(shelf: number, slot: number, port: number): number {
-  return 268500992 + (slot * 256) + port
+  return 268435456 + (shelf * 65536) + (slot * 256) + port
 }
 
 /**
- * Konversi raw integer optical power ZTE ke dBm
+ * Konversi nilai integer optical power ZTE ke format desimal dBm
  */
 function convertZteRxPower(rawVal: number): number | null {
-  if (rawVal === 0 || rawVal === 65535 || rawVal === 2147483647 || rawVal === -1) {
+  if (
+    rawVal === 0 ||
+    rawVal === 65535 ||
+    rawVal === 2147483647 ||
+    rawVal === -1 ||
+    rawVal === 2147483648
+  ) {
     return null
   }
-  // Formula optical power ZTE: (val * 0.002) - 30 dBm atau jika nilai bertipe signed 16-bit
-  if (rawVal > 30000) {
+
+  // Jika nilai signed 16-bit
+  if (rawVal > 30000 && rawVal <= 65536) {
     return Number(((rawVal - 65536) * 0.002 - 30).toFixed(2))
   }
-  const calculated = (rawVal * 0.002) - 30
+
+  // Standar skala 0.002 - 30 dBm
+  const calculated = rawVal * 0.002 - 30
+  if (calculated < -45 || calculated > 10) {
+    // Beberapa firmware mengembalikan nilai 0.01 dBm langsung
+    const altCalculated = rawVal * 0.01
+    if (altCalculated >= -45 && altCalculated <= 10) {
+      return Number(altCalculated.toFixed(2))
+    }
+  }
+
   return Number(calculated.toFixed(2))
 }
 
 /**
- * Test koneksi dasar ke OLT via SNMP (sysName & sysDescr)
+ * Test koneksi dasar ke OLT via SNMP
  */
 export async function testOltConnection(configParam?: OltConnectionConfig): Promise<{
   success: boolean
@@ -162,7 +177,7 @@ export async function testOltConnection(configParam?: OltConnectionConfig): Prom
 }
 
 /**
- * Cek status dan RX dBm satu ONU via SNMP Direct OID (Direct get, bukan subtree walk)
+ * Cek status dan RX dBm satu ONU via SNMP Direct OID
  */
 export async function checkZteC320Onu(
   onuInterface: string,
@@ -174,16 +189,17 @@ export async function checkZteC320Onu(
       onuInterface,
       onuStatus: 'UNKNOWN',
       onuRxPower: null,
-      rawStatusText: 'Format interface tidak valid (Gunakan format 1/x/y:z atau gpon-onu_1/x/y:z)',
+      rawStatusText: 'Format interface tidak valid (Gunakan format gpon-onu_1/x/y:z atau 1/x/y:z)',
     }
   }
 
   const config = configParam || getOltConfigFromEnv()
   const ifIndex = calculateZteIfIndex(parsed.shelf, parsed.slot, parsed.port)
-  
-  // Full specific OID untuk ONU tersebut
+
   const targetStatusOid = `${OID_ZTE_ONU_STATUS_PREFIX}.${ifIndex}.${parsed.onuId}`
-  const targetRxPowerOid = `${OID_ZTE_ONU_RX_POWER_PREFIX}.${ifIndex}.${parsed.onuId}.1`
+  // Query 2 kemungkinan sub-index OID optical power pada ZTE C320 (dengan .1 dan tanpa .1)
+  const targetRxPowerOidA = `${OID_ZTE_ONU_RX_POWER_PREFIX}.${ifIndex}.${parsed.onuId}.1`
+  const targetRxPowerOidB = `${OID_ZTE_ONU_RX_POWER_PREFIX}.${ifIndex}.${parsed.onuId}`
 
   return new Promise((resolve) => {
     let session: any
@@ -208,12 +224,12 @@ export async function checkZteC320Onu(
           onuInterface,
           onuStatus: 'UNKNOWN',
           onuRxPower: null,
-          rawStatusText: 'SNMP Request Timeout',
+          rawStatusText: `SNMP Request Timeout ke OLT ${config.host}`,
         })
       }
     }, (config.timeoutMs || 4000) + 500)
 
-    session.get([targetStatusOid, targetRxPowerOid], (err: any, varbinds: any[]) => {
+    session.get([targetStatusOid, targetRxPowerOidA, targetRxPowerOidB], (err: any, varbinds: any[]) => {
       if (isResolved) return
       isResolved = true
       clearTimeout(timeout)
@@ -237,25 +253,28 @@ export async function checkZteC320Onu(
 
         if (vb.oid.startsWith(OID_ZTE_ONU_STATUS_PREFIX)) {
           statusCode = Number(vb.value)
-          if (statusCode === 5) onuStatus = 'ONLINE'
+          if (statusCode === 5 || statusCode === 3) onuStatus = 'ONLINE'
           else if (statusCode === 4) onuStatus = 'OFFLINE'
           else if (statusCode === 2) onuStatus = 'LOS'
-          else if (statusCode === 1) onuStatus = 'OFFLINE' // Logging/Deregistered
+          else if (statusCode === 1) onuStatus = 'OFFLINE'
         }
 
-        if (vb.oid.startsWith(OID_ZTE_ONU_RX_POWER_PREFIX)) {
-          rawRxValue = Number(vb.value)
+        if (vb.oid.startsWith(OID_ZTE_ONU_RX_POWER_PREFIX) && rawRxValue === null) {
+          const val = Number(vb.value)
+          if (!Number.isNaN(val)) {
+            rawRxValue = val
+          }
         }
       }
 
-      const rxPower = (onuStatus === 'ONLINE' && rawRxValue !== null) ? convertZteRxPower(rawRxValue) : null
+      const rxPower = onuStatus === 'ONLINE' && rawRxValue !== null ? convertZteRxPower(rawRxValue) : null
 
       resolve({
         onuInterface,
         onuStatus,
         onuRxPower: rxPower,
-        rawStatusText: statusCode !== -1 ? `SNMP Status Code: ${statusCode} (${onuStatus})` : 'ONU Not Found / No Response',
-        rawOutput: `RawStatusCode: ${statusCode}, RawRx: ${rawRxValue}`,
+        rawStatusText: statusCode !== -1 ? `Status Code: ${statusCode} (${onuStatus})` : 'ONU Not Found / No Response',
+        rawOutput: `ifIndex: ${ifIndex}, StatusCode: ${statusCode}, RawRx: ${rawRxValue}`,
       })
     })
   })
