@@ -935,10 +935,6 @@ app.delete('/api/network-devices/:id', requireAdmin, async (req, res) => {
 
     const existingDevice = await prisma.networkDevice.findUnique({
       where: { id },
-      include: {
-        mikrotikClients: { select: { id: true } },
-        oltClients: { select: { id: true } },
-      },
     })
 
     if (!existingDevice) {
@@ -949,37 +945,35 @@ app.delete('/api/network-devices/:id', requireAdmin, async (req, res) => {
       return
     }
 
-    const usedByClientCount = existingDevice.mikrotikClients.length + existingDevice.oltClients.length
-
-    if (usedByClientCount > 0) {
-      const device = await prisma.networkDevice.update({
-        where: { id },
-        data: { isActive: false },
+    // 1. Lepaskan relasi device dari semua client/node terlebih dahulu agar tidak memicu error Foreign Key
+    if (existingDevice.type === 'MIKROTIK') {
+      await prisma.node.updateMany({
+        where: { mikrotikDeviceId: id },
+        data: { mikrotikDeviceId: null },
       })
-
-      res.json({
-        success: true,
-        message: 'Perangkat masih dipakai client, jadi hanya dinonaktifkan.',
-        device: sanitizeNetworkDevice(device),
+    } else if (existingDevice.type === 'OLT') {
+      await prisma.node.updateMany({
+        where: { oltDeviceId: id },
+        data: { oltDeviceId: null },
       })
-      return
     }
 
+    // 2. Hapus perangkat dari database secara permanen
     await prisma.networkDevice.delete({
       where: { id },
     })
 
     res.json({
       success: true,
-      message: 'Perangkat monitoring berhasil dihapus.',
+      message: 'Perangkat monitoring berhasil dihapus secara permanen.',
       id,
     })
   } catch (error) {
-    console.error(error)
+    console.error('Gagal hapus network device:', error)
 
     res.status(500).json({
       success: false,
-      message: 'Gagal menghapus perangkat monitoring.',
+      message: error instanceof Error ? error.message : 'Gagal menghapus perangkat monitoring.',
     })
   }
 })
