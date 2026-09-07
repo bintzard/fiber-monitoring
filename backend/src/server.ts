@@ -1,5 +1,5 @@
 import { startPingMonitor } from './monitoring/pingMonitor'
-import { startPppoeMonitor } from './monitoring/pppoeMonitor'
+import { startPppoeMonitor, detectClientPppoeAndOlt } from './monitoring/pppoeMonitor'
 import { startOltMonitor } from './monitoring/oltMonitor'
 import { checkZteC320Onu, testOltConnection } from './olt/zteC320'
 import express, { type NextFunction, type Request, type Response } from 'express'
@@ -945,7 +945,6 @@ app.delete('/api/network-devices/:id', requireAdmin, async (req, res) => {
       return
     }
 
-    // 1. Lepaskan relasi device dari semua client/node terlebih dahulu agar tidak memicu error Foreign Key
     if (existingDevice.type === 'MIKROTIK') {
       await prisma.node.updateMany({
         where: { mikrotikDeviceId: id },
@@ -958,7 +957,6 @@ app.delete('/api/network-devices/:id', requireAdmin, async (req, res) => {
       })
     }
 
-    // 2. Hapus perangkat dari database secara permanen
     await prisma.networkDevice.delete({
       where: { id },
     })
@@ -995,7 +993,7 @@ app.post('/api/network-devices/:id/test', requireAdmin, async (req, res) => {
     }
 
     if (device.type === 'OLT') {
-      const community = decryptSecret(device.passwordEncrypted) || 'public'
+      const community = decryptSecret(device.passwordEncrypted) || 'balen'
       try {
         const result = await testOltConnection({
           host: device.host,
@@ -1099,10 +1097,9 @@ app.post('/api/olt/check-onu', requireEditAccess, async (req, res) => {
       return
     }
 
-    // Ambil host & community dari device OLT yang dipilih
     let oltHost = process.env.OLT_HOST || '136.2.2.200'
     let oltPort = Number(process.env.OLT_PORT || 161)
-    let oltCommunity = process.env.OLT_COMMUNITY || 'public'
+    let oltCommunity = process.env.OLT_COMMUNITY || 'balen'
 
     if (oltDeviceId) {
       const device = await prisma.networkDevice.findUnique({
@@ -1111,11 +1108,10 @@ app.post('/api/olt/check-onu', requireEditAccess, async (req, res) => {
       if (device) {
         oltHost = device.host
         oltPort = device.port || 161
-        oltCommunity = decryptSecret(device.passwordEncrypted) || 'public'
+        oltCommunity = decryptSecret(device.passwordEncrypted) || 'balen'
       }
     }
 
-    // Panggil checkZteC320Onu dengan parameter host & community
     const result = await checkZteC320Onu(onuInterface, {
       host: oltHost,
       port: oltPort,
@@ -1191,6 +1187,38 @@ app.post('/api/olt/check-onu', requireEditAccess, async (req, res) => {
     res.status(500).json({
       success: false,
       message: error instanceof Error ? error.message : 'Gagal query SNMP ONU ke OLT.',
+    })
+  }
+})
+
+// Endpoint Sinkronisasi Otomatis PPPoE MikroTik & OLT
+app.post('/api/client/sync-pppoe', requireEditAccess, async (req, res) => {
+  try {
+    const { pppoeUsername, mikrotikDeviceId, oltDeviceId } = req.body
+
+    if (!pppoeUsername) {
+      return res.status(400).json({
+        success: false,
+        message: 'Username PPPoE wajib diisi.',
+      })
+    }
+
+    const result = await detectClientPppoeAndOlt({
+      pppoeUsername,
+      mikrotikDeviceId,
+      oltDeviceId,
+    })
+
+    res.json({
+      success: true,
+      message: 'Deteksi PPPoE & OLT berhasil.',
+      data: result,
+    })
+  } catch (error) {
+    console.error('SYNC PPPOE ERROR:', error)
+    res.status(500).json({
+      success: false,
+      message: error instanceof Error ? error.message : 'Gagal sinkronisasi PPPoE & OLT.',
     })
   }
 })

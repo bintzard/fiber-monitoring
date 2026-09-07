@@ -32,10 +32,11 @@ type MikrotikDevice = NetworkDevice & {
   type: "MIKROTIK";
 };
 
+// Mendukung pemisah titik dua (:) maupun titik (.) contoh: 1/2/3:2 atau 1/2/3.2
 export function extractPonInterfaceFromUsername(username: string): string | null {
-  const match = username.match(/(\d+\/\d+\/\d+:\d+)/);
+  const match = username.match(/(\d+\/\d+\/\d+)[:.](\d+)/);
   if (!match) return null;
-  return `gpon-onu_${match[1]}`;
+  return `gpon-onu_${match[1]}:${match[2]}`;
 }
 
 export async function detectClientPppoeAndOlt(input: {
@@ -46,42 +47,41 @@ export async function detectClientPppoeAndOlt(input: {
   const username = normalizeUsername(input.pppoeUsername);
   const detectedOnuInterface = extractPonInterfaceFromUsername(input.pppoeUsername);
 
-  let mikrotikDevice: NetworkDevice | null = null;
-  if (input.mikrotikDeviceId) {
-    mikrotikDevice = await prisma.networkDevice.findUnique({
-      where: { id: input.mikrotikDeviceId },
-    });
-  } else {
-    mikrotikDevice = await prisma.networkDevice.findFirst({
-      where: { type: "MIKROTIK", isActive: true },
-    });
-  }
+  const mikrotikDevices = await prisma.networkDevice.findMany({
+    where: { type: "MIKROTIK", isActive: true },
+  });
 
   let pppoeUser: PppActiveUser | null = null;
-  if (mikrotikDevice && validateMikrotikDevice(mikrotikDevice)) {
-    try {
-      const activeUsers = await getPppoeActiveUsers(mikrotikDevice);
-      pppoeUser =
-        activeUsers.find(
+  let matchedMikrotikId = input.mikrotikDeviceId || null;
+
+  // Cari sesi PPPoE di MikroTik yang dipilih atau cari ke semua MikroTik aktif
+  const targetMikrotiks = input.mikrotikDeviceId
+    ? mikrotikDevices.filter((d) => d.id === input.mikrotikDeviceId)
+    : mikrotikDevices;
+
+  for (const dev of targetMikrotiks) {
+    if (validateMikrotikDevice(dev)) {
+      try {
+        const activeUsers = await getPppoeActiveUsers(dev);
+        const found = activeUsers.find(
           (u) => u.name && normalizeUsername(u.name) === username,
-        ) || null;
-    } catch (err) {
-      console.warn("[PPPOE] Gagal query MikroTik saat auto-detect:", err);
+        );
+        if (found) {
+          pppoeUser = found;
+          matchedMikrotikId = dev.id;
+          break;
+        }
+      } catch (err) {
+        console.warn(`[PPPOE] Gagal query ${dev.name}:`, err);
+      }
     }
   }
 
   let oltData: any = null;
   if (detectedOnuInterface) {
-    let oltDevice: NetworkDevice | null = null;
-    if (input.oltDeviceId) {
-      oltDevice = await prisma.networkDevice.findUnique({
-        where: { id: input.oltDeviceId },
-      });
-    } else {
-      oltDevice = await prisma.networkDevice.findFirst({
-        where: { type: "OLT", isActive: true },
-      });
-    }
+    const oltDevice = input.oltDeviceId
+      ? await prisma.networkDevice.findUnique({ where: { id: input.oltDeviceId } })
+      : await prisma.networkDevice.findFirst({ where: { type: "OLT", isActive: true } });
 
     if (oltDevice) {
       const community = decryptSecret(oltDevice.passwordEncrypted) || "balen";
@@ -104,7 +104,7 @@ export async function detectClientPppoeAndOlt(input: {
     onuInterface: detectedOnuInterface,
     rxPower: oltData?.onuRxPower ?? null,
     onuStatus: oltData?.onuStatus || (pppoeUser ? "ONLINE" : "UNKNOWN"),
-    mikrotikDeviceId: mikrotikDevice?.id || null,
+    mikrotikDeviceId: matchedMikrotikId,
   };
 }
 
@@ -236,11 +236,6 @@ async function connectMikrotik(device: MikrotikDevice): Promise<RouterOSAPI> {
 }
 
 function resetMikrotikConnection(deviceId: string, reason?: unknown) {
-  if (reason) {
-    const message = reason instanceof Error ? reason.message : String(reason);
-    console.warn(`[PPPOE] Reset koneksi MikroTik ${deviceId}: ${message}`);
-  }
-
   const client = mikrotikClients.get(deviceId);
   if (client) {
     try {
@@ -312,6 +307,23 @@ async function runPppoeCheck(io: Server) {
     const validDevices = mikrotikDevices.filter(validateMikrotikDevice);
     if (validDevices.length === 0) return;
 
+    // 1. Ambil seluruh user aktif dari SEMUA MikroTik terlebih dahulu
+    const allActiveUsersMap = new Map<string, { user: PppActiveUser; deviceId: string }>();
+
+    for (const device of validDevices) {
+      try {
+        const users = await getPppoeActiveUsers(device);
+        for (const u of users) {
+          if (u.name) {
+            allActiveUsersMap.set(normalizeUsername(u.name), { user: u, deviceId: device.id });
+          }
+        }
+      } catch (err) {
+        console.error(`[PPPOE] Gagal membaca ${device.name}:`, err);
+      }
+    }
+
+    // 2. Ambil node client yang dipantau
     const monitoredNodes = await prisma.node.findMany({
       where: {
         monitoringEnabled: true,
@@ -321,164 +333,62 @@ async function runPppoeCheck(io: Server) {
       orderBy: { id: "asc" },
     });
 
-    if (monitoredNodes.length === 0) return;
+    for (const node of monitoredNodes) {
+      if (!node.pppoeUsername) continue;
 
-    for (const device of validDevices) {
-      const nodesForDevice = monitoredNodes.filter(
-        (node) => !node.mikrotikDeviceId || node.mikrotikDeviceId === device.id,
-      );
+      const username = normalizeUsername(node.pppoeUsername);
+      const activeEntry = allActiveUsersMap.get(username);
+      const isOnline = Boolean(activeEntry);
+      const nextStatus: NodeStatus = isOnline ? "ONLINE" : "OFFLINE";
+      const nextIpAddress = activeEntry?.user.address || node.ipAddress;
+      const autoOnuInterface =
+        node.onuInterface || extractPonInterfaceFromUsername(node.pppoeUsername);
+      const autoMikrotikId = activeEntry?.deviceId || node.mikrotikDeviceId;
 
-      if (nodesForDevice.length === 0) continue;
+      const shouldUpdate =
+        node.status !== nextStatus ||
+        node.ipAddress !== nextIpAddress ||
+        node.onuInterface !== autoOnuInterface ||
+        (activeEntry && node.mikrotikDeviceId !== autoMikrotikId);
 
-      let activeUsers: PppActiveUser[];
-      try {
-        activeUsers = await getPppoeActiveUsers(device);
-      } catch (error) {
-        console.error(`[PPPOE] Gagal membaca ${device.name}:`, error);
-        await prisma.networkDevice.update({
-          where: { id: device.id },
+      if (shouldUpdate) {
+        const updatedNode = await prisma.node.update({
+          where: { id: node.id },
           data: {
-            connectionStatus: "ERROR",
-            lastConnectionMessage:
-              error instanceof Error ? error.message : "Gagal konek ke MikroTik",
+            status: nextStatus,
+            ipAddress: nextIpAddress,
+            onuInterface: autoOnuInterface,
+            mikrotikDeviceId: autoMikrotikId,
+            lastCheckedAt: new Date(),
+            lastSeenAt: nextStatus === "ONLINE" ? new Date() : node.lastSeenAt,
+            offlineSince: nextStatus === "OFFLINE" ? node.offlineSince || new Date() : null,
           },
         });
-        continue;
-      }
 
-      const activeUsernameSet = new Set(
-        activeUsers
-          .map((user) => user.name)
-          .filter((name): name is string => Boolean(name))
-          .map((name) => normalizeUsername(name)),
-      );
-
-      for (const node of nodesForDevice) {
-        if (!node.pppoeUsername) continue;
-
-        const username = normalizeUsername(node.pppoeUsername);
-        const isOnline = activeUsernameSet.has(username);
-        const nextStatus: NodeStatus = isOnline ? "ONLINE" : "OFFLINE";
-
-        const activeUser = activeUsers.find(
-          (user) => user.name && normalizeUsername(user.name) === username,
-        );
-
-        const nextIpAddress = activeUser?.address || node.ipAddress;
-        const autoOnuInterface =
-          node.onuInterface || extractPonInterfaceFromUsername(node.pppoeUsername);
-
-        const shouldUpdate =
-          node.status !== nextStatus ||
-          node.ipAddress !== nextIpAddress ||
-          node.onuInterface !== autoOnuInterface;
-
-        if (shouldUpdate) {
-          const updatedNode = await updateNodeStatusFromPppoe(
-            node.id,
-            nextStatus,
-            nextIpAddress || null,
-            autoOnuInterface || null,
-          );
-
-          if (node.status !== updatedNode.status) {
-            await createMonitoringLog(io, {
-              nodeId: updatedNode.id,
-              eventType: getMonitoringLogEventType(updatedNode.status),
-              oldStatus: node.status,
-              newStatus: updatedNode.status,
-              title: getMonitoringLogTitle(updatedNode.status),
-              message: `${updatedNode.name} berubah menjadi ${updatedNode.status} lewat monitoring PPPoE ${device.name}.`,
-            });
-          }
-
-          const affectedCables = await updateCableStatusByNode(
-            node.id,
-            nextStatus,
-          );
-
-          const recalculatedTopology = await recalculateOdpStatusByClient(
-            node.id,
-          );
-
-          io.emit("node-status-updated", updatedNode);
-
-          affectedCables.forEach((cable) => {
-            io.emit("cable-status-updated", cable);
+        if (node.status !== updatedNode.status) {
+          await createMonitoringLog(io, {
+            nodeId: updatedNode.id,
+            eventType: getMonitoringLogEventType(updatedNode.status),
+            oldStatus: node.status,
+            newStatus: updatedNode.status,
+            title: getMonitoringLogTitle(updatedNode.status),
+            message: `${updatedNode.name} berubah menjadi ${updatedNode.status} lewat monitoring PPPoE.`,
           });
-
-          recalculatedTopology.updatedNodes.forEach((updatedTopologyNode) => {
-            io.emit("node-status-updated", updatedTopologyNode);
-          });
-
-          recalculatedTopology.updatedCables.forEach((updatedCable) => {
-            io.emit("cable-status-updated", updatedCable);
-          });
-        } else {
-          const checkedNode = await updateLastCheckedAt(node.id, nextStatus);
-          if (checkedNode) {
-            io.emit("node-status-updated", checkedNode);
-          }
         }
+
+        const affectedCables = await updateCableStatusByNode(node.id, nextStatus);
+        const recalculatedTopology = await recalculateOdpStatusByClient(node.id);
+
+        io.emit("node-status-updated", updatedNode);
+
+        affectedCables.forEach((cable) => io.emit("cable-status-updated", cable));
+        recalculatedTopology.updatedNodes.forEach((n) => io.emit("node-status-updated", n));
+        recalculatedTopology.updatedCables.forEach((c) => io.emit("cable-status-updated", c));
       }
     }
   } catch (error) {
     console.error("PPPOE MONITOR ERROR:", error);
   }
-}
-
-async function updateNodeStatusFromPppoe(
-  nodeId: string,
-  status: NodeStatus,
-  ipAddress: string | null,
-  onuInterface: string | null,
-): Promise<Node> {
-  const existingNode = await prisma.node.findUnique({
-    where: { id: nodeId },
-  });
-
-  if (!existingNode) {
-    throw new Error("Node tidak ditemukan saat update PPPoE status.");
-  }
-
-  const now = new Date();
-
-  return prisma.node.update({
-    where: { id: nodeId },
-    data: {
-      status,
-      ipAddress,
-      onuInterface: onuInterface || existingNode.onuInterface,
-      latencyMs: null,
-      lastCheckedAt: now,
-      lastSeenAt: status === "ONLINE" ? now : existingNode.lastSeenAt,
-      offlineSince:
-        status === "OFFLINE" ? existingNode.offlineSince || now : null,
-    },
-  });
-}
-
-async function updateLastCheckedAt(
-  nodeId: string,
-  status: NodeStatus,
-): Promise<Node | null> {
-  const existingNode = await prisma.node.findUnique({
-    where: { id: nodeId },
-  });
-
-  if (!existingNode) return null;
-
-  const now = new Date();
-
-  return prisma.node.update({
-    where: { id: nodeId },
-    data: {
-      lastCheckedAt: now,
-      lastSeenAt: status === "ONLINE" ? now : existingNode.lastSeenAt,
-      offlineSince:
-        status === "OFFLINE" ? existingNode.offlineSince || now : null,
-    },
-  });
 }
 
 function getMonitoringLogEventType(status: NodeStatus): MonitoringLogEventType {
@@ -534,25 +444,16 @@ async function createMonitoringLog(io: Server, payload: MonitoringLogPayload) {
   }
 }
 
-async function updateCableStatusByNode(
-  nodeId: string,
-  status: NodeStatus,
-): Promise<Cable[]> {
+async function updateCableStatusByNode(nodeId: string, status: NodeStatus): Promise<Cable[]> {
   const affectedCables: Cable[] = [];
-
-  const relatedCable = await prisma.cable.findFirst({
-    where: { toNodeId: nodeId },
-  });
+  const relatedCable = await prisma.cable.findFirst({ where: { toNodeId: nodeId } });
 
   if (relatedCable) {
-    const updatedRelatedCable = await prisma.cable.update({
+    const updated = await prisma.cable.update({
       where: { id: relatedCable.id },
-      data: {
-        status: status === "OFFLINE" ? "BROKEN" : "NORMAL",
-      },
+      data: { status: status === "OFFLINE" ? "BROKEN" : "NORMAL" },
     });
-
-    affectedCables.push(updatedRelatedCable);
+    affectedCables.push(updated);
   }
 
   return affectedCables;
@@ -562,18 +463,12 @@ async function recalculateOdpStatusByClient(clientId: string): Promise<{
   updatedNodes: Node[];
   updatedCables: Cable[];
 }> {
-  const client = await prisma.node.findUnique({
-    where: { id: clientId },
-  });
-
+  const client = await prisma.node.findUnique({ where: { id: clientId } });
   if (!client || client.type !== "CLIENT" || !client.parentId) {
     return { updatedNodes: [], updatedCables: [] };
   }
 
-  const odp = await prisma.node.findUnique({
-    where: { id: client.parentId },
-  });
-
+  const odp = await prisma.node.findUnique({ where: { id: client.parentId } });
   if (!odp || odp.type !== "ODP") {
     return { updatedNodes: [], updatedCables: [] };
   }
@@ -583,7 +478,6 @@ async function recalculateOdpStatusByClient(clientId: string): Promise<{
   });
 
   const offlineClients = clients.filter((item) => item.status === "OFFLINE");
-
   let odpStatus: NodeStatus = "ONLINE";
   let cableToOdpStatus: CableStatus = "NORMAL";
 
@@ -611,16 +505,12 @@ async function recalculateOdpStatusByClient(clientId: string): Promise<{
 
   updatedNodes.push(updatedOdp);
 
-  const cableToOdp = await prisma.cable.findFirst({
-    where: { toNodeId: odp.id },
-  });
-
+  const cableToOdp = await prisma.cable.findFirst({ where: { toNodeId: odp.id } });
   if (cableToOdp) {
     const updatedCableToOdp = await prisma.cable.update({
       where: { id: cableToOdp.id },
       data: { status: cableToOdpStatus },
     });
-
     updatedCables.push(updatedCableToOdp);
   }
 
