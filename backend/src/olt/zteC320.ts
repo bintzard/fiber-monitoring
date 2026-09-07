@@ -71,17 +71,28 @@ export function parseZteOnuIndex(onuInterface: string): {
 }
 
 /**
- * Rumus persis ifIndex OLT ZTE C320:
- * Slot 2 Port 1 = 268501248 -> 268500992 + (port * 256)
- * Format umum: 268435456 + (shelf * 65536) + (slot * 4096) + (port * 256)
+ * Perhitungan ifIndex GPON ZTE C320 untuk Slot 2 (Port 1 - 16)
+ * Port 1-8  : 268500992 + (port * 256)
+ * Port 9-16 : 268566528 + ((port - 8) * 256) -> Port 13 = 268569856
  */
 function calculateZteIfIndex(shelf: number, slot: number, port: number): number {
   if (slot === 2) {
-    return 268500992 + (port * 256)
+    if (port <= 8) {
+      return 268500992 + (port * 256)
+    } else {
+      return 268566528 + ((port - 8) * 256)
+    }
   }
+
   if (slot === 3) {
-    return 268566528 + (port * 256)
+    if (port <= 8) {
+      return 268566528 + (port * 256)
+    } else {
+      return 268632064 + ((port - 8) * 256)
+    }
   }
+
+  // Fallback standar bit-shifting ZTE
   return 268435456 + (shelf * 65536) + (slot * 4096) + (port * 256)
 }
 
