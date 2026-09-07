@@ -2034,18 +2034,17 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
               <button
                 type="button"
                 className="edit-node-button"
-                onClick={() => {
+                onClick={(e) => {
+                  e.stopPropagation()
+                  e.preventDefault()
                   if (node.type === 'CLIENT' || node.type === 'ROUTER') {
                     setEditingClient(node)
                     return
                   }
-
                   setEditingNode(node)
                 }}
               >
-                {node.type === 'CLIENT' || node.type === 'ROUTER'
-                  ? 'Edit Client'
-                  : 'Edit Node'}
+                {node.type === 'CLIENT' || node.type === 'ROUTER' ? 'Edit Client' : 'Edit Node'}
               </button>
             )}
 
