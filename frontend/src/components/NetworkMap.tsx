@@ -609,6 +609,7 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
   const [statusHistory, setStatusHistory] = useState<OfflineNotification[]>([])
 
   const nodeStatusRef = useRef<Record<string, string>>({})
+  const updatedNodesQueueRef = useRef<Map<string, NetworkNode>>(new Map())
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -786,8 +787,8 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
     try {
       const alerts = await getFaultAlerts()
       setFaultAlerts(alerts)
-    } catch (error) {
-      console.error(error)
+    } catch (err: unknown) {
+      console.error(err)
     }
   }, [getFaultAlerts])
 
@@ -795,8 +796,8 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
     try {
       const logs = await fetchMonitoringLogs()
       setStatusHistory(logs)
-    } catch (error) {
-      console.error(error)
+    } catch (err: unknown) {
+      console.error(err)
     }
   }, [])
 
@@ -810,8 +811,8 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
       if (response.ok) {
         setDevices(data.devices || [])
       }
-    } catch (error) {
-      console.error('Gagal mengambil perangkat:', error)
+    } catch (err: unknown) {
+      console.error('Gagal mengambil perangkat:', err)
     }
   }, [canManageUsers])
 
@@ -952,7 +953,7 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
         )
 
         void refreshDevices()
-      } catch (err) {
+      } catch (err: unknown) {
         console.error(err)
         setError('Backend belum bisa diakses atau API bermasalah')
       } finally {
@@ -962,6 +963,30 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
 
     loadInitialData()
   }, [getFaultAlerts, refreshDevices])
+
+  // Batching Interval untuk Socket Status agar Peta Ringan & Anti-Lag
+  useEffect(() => {
+    const batchInterval = window.setInterval(() => {
+      if (updatedNodesQueueRef.current.size === 0) return
+
+      const updates = Array.from(updatedNodesQueueRef.current.values())
+      updatedNodesQueueRef.current.clear()
+
+      const updateMap = new Map(updates.map((n) => [n.id, n]))
+
+      setNodes((previousNodes) =>
+        previousNodes.map((node) => updateMap.get(node.id) || node),
+      )
+
+      setEditingNode((current) => (current && updateMap.has(current.id) ? updateMap.get(current.id)! : current))
+      setEditingClient((current) => (current && updateMap.has(current.id) ? updateMap.get(current.id)! : current))
+      setSelectedSearchNode((current) => (current && updateMap.has(current.id) ? updateMap.get(current.id)! : current))
+
+      refreshFaultAlerts()
+    }, 250)
+
+    return () => window.clearInterval(batchInterval)
+  }, [refreshFaultAlerts])
 
   useEffect(() => {
     socket.on('connect', () => {
@@ -980,51 +1005,15 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
         showStatusNotification(updatedNode)
       }
 
-      setNodes((previousNodes) =>
-        previousNodes.map((node) =>
-          node.id === updatedNode.id ? updatedNode : node,
-        ),
-      )
-
-      setEditingNode((currentEditingNode) => {
-        if (!currentEditingNode) return currentEditingNode
-
-        return currentEditingNode.id === updatedNode.id
-          ? updatedNode
-          : currentEditingNode
-      })
-
-      setEditingClient((currentEditingClient) => {
-        if (!currentEditingClient) return currentEditingClient
-
-        return currentEditingClient.id === updatedNode.id
-          ? updatedNode
-          : currentEditingClient
-      })
-
-      setSelectedSearchNode((currentSelectedNode) => {
-        if (!currentSelectedNode) return currentSelectedNode
-
-        return currentSelectedNode.id === updatedNode.id
-          ? updatedNode
-          : currentSelectedNode
-      })
-
-      refreshFaultAlerts()
+      updatedNodesQueueRef.current.set(updatedNode.id, updatedNode)
     })
 
     socket.on('node-created', (newNode: NetworkNode) => {
       nodeStatusRef.current[newNode.id] = newNode.status
 
       setNodes((previousNodes) => {
-        const alreadyExists = previousNodes.some(
-          (node) => node.id === newNode.id,
-        )
-
-        if (alreadyExists) {
-          return previousNodes
-        }
-
+        const alreadyExists = previousNodes.some((node) => node.id === newNode.id)
+        if (alreadyExists) return previousNodes
         return [...previousNodes, newNode]
       })
 
@@ -1033,28 +1022,15 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
 
     socket.on('node-deleted', (payload: { id: string }) => {
       delete nodeStatusRef.current[payload.id]
+      updatedNodesQueueRef.current.delete(payload.id)
 
       setNodes((previousNodes) =>
         previousNodes.filter((node) => node.id !== payload.id),
       )
 
-      setEditingNode((currentEditingNode) => {
-        if (!currentEditingNode) return currentEditingNode
-
-        return currentEditingNode.id === payload.id ? null : currentEditingNode
-      })
-
-      setEditingClient((currentEditingClient) => {
-        if (!currentEditingClient) return currentEditingClient
-
-        return currentEditingClient.id === payload.id ? null : currentEditingClient
-      })
-
-      setSelectedSearchNode((currentSelectedNode) => {
-        if (!currentSelectedNode) return currentSelectedNode
-
-        return currentSelectedNode.id === payload.id ? null : currentSelectedNode
-      })
+      setEditingNode((current) => (current?.id === payload.id ? null : current))
+      setEditingClient((current) => (current?.id === payload.id ? null : current))
+      setSelectedSearchNode((current) => (current?.id === payload.id ? null : current))
 
       refreshFaultAlerts()
     })
@@ -1066,29 +1042,9 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
         ),
       )
 
-      setEditingNode((currentEditingNode) => {
-        if (!currentEditingNode) return currentEditingNode
-
-        return currentEditingNode.id === updatedNode.id
-          ? updatedNode
-          : currentEditingNode
-      })
-
-      setEditingClient((currentEditingClient) => {
-        if (!currentEditingClient) return currentEditingClient
-
-        return currentEditingClient.id === updatedNode.id
-          ? updatedNode
-          : currentEditingClient
-      })
-
-      setSelectedSearchNode((currentSelectedNode) => {
-        if (!currentSelectedNode) return currentSelectedNode
-
-        return currentSelectedNode.id === updatedNode.id
-          ? updatedNode
-          : currentSelectedNode
-      })
+      setEditingNode((current) => (current?.id === updatedNode.id ? updatedNode : current))
+      setEditingClient((current) => (current?.id === updatedNode.id ? updatedNode : current))
+      setSelectedSearchNode((current) => (current?.id === updatedNode.id ? updatedNode : current))
 
       refreshFaultAlerts()
     })
@@ -1109,14 +1065,8 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
 
     socket.on('cable-created', (newCable: Cable) => {
       setCables((previousCables) => {
-        const alreadyExists = previousCables.some(
-          (cable) => cable.id === newCable.id,
-        )
-
-        if (alreadyExists) {
-          return previousCables
-        }
-
+        const alreadyExists = previousCables.some((cable) => cable.id === newCable.id)
+        if (alreadyExists) return previousCables
         return [...previousCables, newCable]
       })
 
@@ -1337,10 +1287,10 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
       setCableMessage('')
       setIsAddCableModalOpen(false)
       refreshFaultAlerts()
-    } catch (error) {
+    } catch (err: unknown) {
       setCableMessage(
-        error instanceof Error
-          ? error.message
+        err instanceof Error
+          ? err.message
           : 'Terjadi kesalahan saat menambahkan kabel.',
       )
     } finally {
@@ -1378,9 +1328,9 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
       }
 
       refreshFaultAlerts()
-    } catch (error) {
-      if (error instanceof Error) {
-        alert(error.message)
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        alert(err.message)
       } else {
         alert('Terjadi kesalahan saat menghapus kabel.')
       }
@@ -1510,10 +1460,10 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
       setEditingCableRouteCoordinates([])
       setCableRouteMessage('')
       refreshFaultAlerts()
-    } catch (error) {
+    } catch (err: unknown) {
       setCableRouteMessage(
-        error instanceof Error
-          ? error.message
+        err instanceof Error
+          ? err.message
           : 'Terjadi kesalahan saat menyimpan jalur kabel.',
       )
     } finally {
@@ -1632,9 +1582,9 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
       }
 
       refreshFaultAlerts()
-    } catch (error) {
-      if (error instanceof Error) {
-        alert(error.message)
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        alert(err.message)
       } else {
         alert('Terjadi kesalahan saat menghapus node.')
       }
@@ -1692,9 +1642,9 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
       }
 
       refreshFaultAlerts()
-    } catch (error) {
-      if (error instanceof Error) {
-        alert(error.message)
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        alert(err.message)
       } else {
         alert('Terjadi kesalahan saat menggeser marker.')
       }
@@ -2044,7 +1994,9 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
                   setEditingNode(node)
                 }}
               >
-                {node.type === 'CLIENT' || node.type === 'ROUTER' ? 'Edit Client' : 'Edit Node'}
+                {node.type === 'CLIENT' || node.type === 'ROUTER'
+                  ? 'Edit Client'
+                  : 'Edit Node'}
               </button>
             )}
 
@@ -2052,7 +2004,11 @@ export default function NetworkMap({ currentUser, onLogout }: NetworkMapProps) {
               <button
                 type="button"
                 className="delete-node-button"
-                onClick={() => handleDeleteNode(node.id)}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  e.preventDefault()
+                  handleDeleteNode(node.id)
+                }}
               >
                 Hapus Node
               </button>

@@ -15,18 +15,18 @@ export interface OnuCheckResult {
   rawOutput?: string
 }
 
-// OID Standar MIB-II
+// OID MIB-II
 const OID_SYS_DESCR = '1.3.6.1.2.1.1.1.0'
 const OID_SYS_NAME = '1.3.6.1.2.1.1.5.0'
 
-// OID ZTE C320 GPON Status & RX Power
-const OID_STATUS_V1 = '1.3.6.1.4.1.3902.1012.3.28.2.1.4'
-const OID_RX_POWER_V1 = '1.3.6.1.4.1.3902.1012.3.50.12.1.1.10'
-const OID_STATUS_V2 = '1.3.6.1.4.1.3902.1082.500.1.2.1.1'
+// OID ZTE C320 GPON ONU Status
+const OID_ZTE_ONU_STATUS_PREFIX = '1.3.6.1.4.1.3902.1012.3.28.2.1.4'
+// OID ZTE C320 GPON ONU RX Optical Power
+const OID_ZTE_ONU_RX_POWER_PREFIX = '1.3.6.1.4.1.3902.1012.3.50.12.1.1.10'
 
 export function getOltConfigFromEnv(): OltConnectionConfig {
-  const host = process.env.OLT_HOST || '127.0.0.1'
-  const community = process.env.OLT_COMMUNITY || process.env.OLT_PASSWORD || 'public'
+  const host = process.env.OLT_HOST || '136.2.2.200'
+  const community = process.env.OLT_COMMUNITY || process.env.OLT_PASSWORD || 'balen'
 
   return {
     host,
@@ -70,14 +70,19 @@ export function parseZteOnuIndex(onuInterface: string): {
   }
 }
 
-// Menghasilkan daftar kemungkinan ifIndex untuk ZTE C320
-function getPossibleIfIndexes(shelf: number, slot: number, port: number): number[] {
-  return [
-    268500992 + (slot * 256) + port,                 // Standar ZTE C320 Slot Base 256
-    268435456 + (shelf * 65536) + (slot * 256) + port, // Formula Bit Shift
-    (1 << 28) + (slot << 8) + port,                   // Firmware V2.x
-    268435456 + (slot * 256) + port,
-  ]
+/**
+ * Rumus persis ifIndex OLT ZTE C320:
+ * Slot 2 Port 1 = 268501248 -> 268500992 + (port * 256)
+ * Format umum: 268435456 + (shelf * 65536) + (slot * 4096) + (port * 256)
+ */
+function calculateZteIfIndex(shelf: number, slot: number, port: number): number {
+  if (slot === 2) {
+    return 268500992 + (port * 256)
+  }
+  if (slot === 3) {
+    return 268566528 + (port * 256)
+  }
+  return 268435456 + (shelf * 65536) + (slot * 4096) + (port * 256)
 }
 
 function convertZteRxPower(rawVal: number): number | null {
@@ -91,10 +96,12 @@ function convertZteRxPower(rawVal: number): number | null {
     return null
   }
 
+  // Jika nilai raw dalam format signed 16-bit
   if (rawVal > 30000 && rawVal <= 65536) {
     return Number(((rawVal - 65536) * 0.002 - 30).toFixed(2))
   }
 
+  // Standar skala ZTE C320: (raw * 0.002) - 30 dBm
   const calculated = rawVal * 0.002 - 30
   if (calculated < -45 || calculated > 10) {
     const altCalculated = rawVal * 0.01
@@ -177,16 +184,11 @@ export async function checkZteC320Onu(
   }
 
   const config = configParam || getOltConfigFromEnv()
-  const possibleIndexes = getPossibleIfIndexes(parsed.shelf, parsed.slot, parsed.port)
+  const ifIndex = calculateZteIfIndex(parsed.shelf, parsed.slot, parsed.port)
 
-  // Buat kumpulan OID untuk semua kemungkinan index
-  const oidsToQuery: string[] = []
-  for (const idx of possibleIndexes) {
-    oidsToQuery.push(`${OID_STATUS_V1}.${idx}.${parsed.onuId}`)
-    oidsToQuery.push(`${OID_RX_POWER_V1}.${idx}.${parsed.onuId}.1`)
-    oidsToQuery.push(`${OID_RX_POWER_V1}.${idx}.${parsed.onuId}`)
-    oidsToQuery.push(`${OID_STATUS_V2}.${idx}.${parsed.onuId}`)
-  }
+  const targetStatusOid = `${OID_ZTE_ONU_STATUS_PREFIX}.${ifIndex}.${parsed.onuId}`
+  const targetRxPowerOidA = `${OID_ZTE_ONU_RX_POWER_PREFIX}.${ifIndex}.${parsed.onuId}.1`
+  const targetRxPowerOidB = `${OID_ZTE_ONU_RX_POWER_PREFIX}.${ifIndex}.${parsed.onuId}`
 
   return new Promise((resolve) => {
     let session: any
@@ -210,12 +212,12 @@ export async function checkZteC320Onu(
           onuInterface,
           onuStatus: 'UNKNOWN',
           onuRxPower: null,
-          rawStatusText: `Timeout SNMP ke OLT ${config.host}`,
+          rawStatusText: `SNMP Request Timeout ke OLT ${config.host}`,
         })
       }
     }, (config.timeoutMs || 4000) + 500)
 
-    session.get(oidsToQuery, (err: any, varbinds: any[]) => {
+    session.get([targetStatusOid, targetRxPowerOidA, targetRxPowerOidB], (err: any, varbinds: any[]) => {
       if (isResolved) return
       isResolved = true
       clearTimeout(timeout)
@@ -237,18 +239,15 @@ export async function checkZteC320Onu(
       for (const vb of varbinds) {
         if (snmp.isVarbindError(vb)) continue
 
-        if (vb.oid.includes(OID_STATUS_V1) || vb.oid.includes(OID_STATUS_V2)) {
-          const val = Number(vb.value)
-          if (!Number.isNaN(val) && val > 0) {
-            statusCode = val
-            if (statusCode === 5 || statusCode === 3) onuStatus = 'ONLINE'
-            else if (statusCode === 4) onuStatus = 'OFFLINE'
-            else if (statusCode === 2) onuStatus = 'LOS'
-            else if (statusCode === 1) onuStatus = 'OFFLINE'
-          }
+        if (vb.oid === targetStatusOid) {
+          statusCode = Number(vb.value)
+          // Status OLT ZTE: 3: online/normal, 5: working, 6: los/offline, 4: offline
+          if (statusCode === 3 || statusCode === 5) onuStatus = 'ONLINE'
+          else if (statusCode === 6 || statusCode === 2) onuStatus = 'LOS'
+          else if (statusCode === 4 || statusCode === 1) onuStatus = 'OFFLINE'
         }
 
-        if (vb.oid.includes(OID_RX_POWER_V1) && rawRxValue === null) {
+        if ((vb.oid === targetRxPowerOidA || vb.oid === targetRxPowerOidB) && rawRxValue === null) {
           const val = Number(vb.value)
           if (!Number.isNaN(val) && val !== 0 && val !== 65535) {
             rawRxValue = val
@@ -262,8 +261,8 @@ export async function checkZteC320Onu(
         onuInterface,
         onuStatus,
         onuRxPower: rxPower,
-        rawStatusText: statusCode !== -1 ? `Status Code: ${statusCode} (${onuStatus})` : 'ONU Not Found / OID Tidak Cocok',
-        rawOutput: `Status: ${statusCode}, RxRaw: ${rawRxValue}`,
+        rawStatusText: statusCode !== -1 ? `Status OLT: ${onuStatus} (Code: ${statusCode})` : 'ONU Not Found / No Response',
+        rawOutput: `ifIndex: ${ifIndex}.${parsed.onuId} -> StatusCode: ${statusCode}, RawRx: ${rawRxValue}`,
       })
     })
   })
