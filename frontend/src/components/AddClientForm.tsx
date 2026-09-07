@@ -67,6 +67,7 @@ export default function AddClientForm({
   const [deviceMessage, setDeviceMessage] = useState("");
 
   const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [generatingId, setGeneratingId] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -135,7 +136,7 @@ export default function AddClientForm({
       }
 
       setId(data.id);
-      setMessage(`ID client otomatis dibuat: ${data.id}`);
+      setMessage(`ID client otomatis: ${data.id}`);
     } catch (error) {
       setMessage(
         error instanceof Error
@@ -144,6 +145,43 @@ export default function AddClientForm({
       );
     } finally {
       setGeneratingId(false);
+    }
+  }
+
+  async function handleSyncPppoeAndOlt() {
+    if (!pppoeUsername.trim()) {
+      setMessage("Masukkan Username PPPoE terlebih dahulu.");
+      return;
+    }
+
+    setSyncing(true);
+    setMessage("Menyinkronkan data PPPoE MikroTik & OLT...");
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/client/sync-pppoe`, {
+        method: "POST",
+        headers: getAuthorizedJsonHeaders(),
+        body: JSON.stringify({
+          pppoeUsername: pppoeUsername.trim(),
+          mikrotikDeviceId: mikrotikDeviceId || undefined,
+          oltDeviceId: oltDeviceId || undefined,
+        }),
+      });
+
+      const resData = await response.json();
+      if (!response.ok) throw new Error(resData.message || "Gagal sinkronisasi data");
+
+      const d = resData.data;
+      if (d.onuInterface) setOnuInterface(d.onuInterface);
+      if (d.mikrotikDeviceId && !mikrotikDeviceId) setMikrotikDeviceId(d.mikrotikDeviceId);
+
+      const rxText = d.rxPower !== null ? `${d.rxPower} dBm` : "-";
+      const ipText = d.ipAddress ? `IP: ${d.ipAddress}` : "IP belum didapat";
+      setMessage(`Sinkron Berhasil! Status: ${d.status} | ${ipText} | Redaman: ${rxText}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Terjadi kesalahan sinkronisasi.");
+    } finally {
+      setSyncing(false);
     }
   }
 
@@ -158,45 +196,10 @@ export default function AddClientForm({
       const cleanPppoeUsername = pppoeUsername.trim();
       const cleanOnuInterface = onuInterface.trim();
 
-      if (!cleanId) {
-        throw new Error("ID client wajib diisi atau klik Generate.");
-      }
-
-      if (!cleanName) {
-        throw new Error("Nama pelanggan wajib diisi.");
-      }
-
-      if (!parentId) {
-        throw new Error("Pilih ODP terlebih dahulu.");
-      }
-
-      if (!latitude || !longitude) {
-        throw new Error("Koordinat client wajib diisi atau ambil dari peta.");
-      }
-
-      if (monitoringMethod === "PPPOE" && !cleanPppoeUsername) {
-        throw new Error(
-          "Username PPPoE wajib diisi jika monitoring memakai PPPoE.",
-        );
-      }
-
-      if (
-        monitoringMethod === "PPPOE" &&
-        mikrotikOptions.length > 0 &&
-        !mikrotikDeviceId
-      ) {
-        throw new Error("Pilih MikroTik untuk monitoring PPPoE.");
-      }
-
-      if (monitoringMethod === "OLT" && !cleanOnuInterface) {
-        throw new Error(
-          "ONU Interface wajib diisi jika monitoring memakai OLT.",
-        );
-      }
-
-      if (monitoringMethod === "OLT" && oltOptions.length > 0 && !oltDeviceId) {
-        throw new Error("Pilih OLT untuk monitoring ONU.");
-      }
+      if (!cleanId) throw new Error("ID client wajib diisi atau klik Generate.");
+      if (!cleanName) throw new Error("Nama pelanggan wajib diisi.");
+      if (!parentId) throw new Error("Pilih ODP terlebih dahulu.");
+      if (!latitude || !longitude) throw new Error("Koordinat client wajib diisi.");
 
       const response = await fetch(`${API_BASE_URL}/api/nodes`, {
         method: "POST",
@@ -211,35 +214,24 @@ export default function AddClientForm({
           status: "UNKNOWN",
           rxPower: null,
           parentId,
-
-          // Monitoring
           pppoeUsername: cleanPppoeUsername || null,
           monitoringEnabled: monitoringMethod !== "MANUAL",
           monitoringMethod,
-          mikrotikDeviceId:
-            monitoringMethod === "PPPOE" ? mikrotikDeviceId || null : null,
-          oltDeviceId: monitoringMethod === "OLT" ? oltDeviceId || null : null,
+          mikrotikDeviceId: mikrotikDeviceId || null,
+          oltDeviceId: oltDeviceId || null,
           onuInterface: cleanOnuInterface || null,
           onuStatus: cleanOnuInterface ? "UNKNOWN" : null,
           onuRxPower: null,
-
-          // Data pelanggan yang tetap dibutuhkan sistem,
-          // tetapi field tambahan tidak lagi ditampilkan di form.
           customerName: cleanName,
           customerPhone: customerPhone.trim() || null,
           customerAddress: customerAddress.trim() || null,
           installationStatus: "ACTIVE",
           salesName: currentUserName || null,
-          technicianName: null,
-          notes: null,
         }),
       });
 
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || "Gagal menambahkan client");
-      }
+      if (!response.ok) throw new Error(data.message || "Gagal menambahkan client");
 
       setMessage("Client berhasil ditambahkan.");
       setId("");
@@ -247,7 +239,6 @@ export default function AddClientForm({
       setCustomerPhone("");
       setCustomerAddress("");
       setParentId("");
-      setMonitoringMethod("PPPOE");
       setPppoeUsername("");
       setOnuInterface("");
       setMikrotikDeviceId("");
@@ -255,9 +246,7 @@ export default function AddClientForm({
       onLatitudeChange("");
       onLongitudeChange("");
 
-      if (onSuccess) {
-        onSuccess(data.node);
-      }
+      if (onSuccess) onSuccess(data.node);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Terjadi kesalahan.");
     } finally {
@@ -279,7 +268,6 @@ export default function AddClientForm({
           placeholder="client-0001"
           required
         />
-
         <button
           type="button"
           className="generate-id-button"
@@ -334,7 +322,7 @@ export default function AddClientForm({
           setMonitoringMethod(event.target.value as MonitoringMethod)
         }
       >
-        <option value="PPPOE">PPPoE MikroTik</option>
+        <option value="PPPOE">PPPoE MikroTik (Auto-Detect OLT)</option>
         <option value="OLT">OLT ZTE C320 / ONU</option>
         <option value="PING">PING IP</option>
         <option value="MANUAL">Manual</option>
@@ -342,66 +330,57 @@ export default function AddClientForm({
 
       {deviceMessage && <p className="form-message form-message-error">{deviceMessage}</p>}
 
-      {monitoringMethod === "PPPOE" && (
-        <>
-          <label>Pilih MikroTik</label>
-          <select
-            value={mikrotikDeviceId}
-            onChange={(event) => setMikrotikDeviceId(event.target.value)}
-            required={mikrotikOptions.length > 0}
-          >
-            <option value="">
-              {mikrotikOptions.length > 0
-                ? "-- Pilih MikroTik --"
-                : "Belum ada MikroTik aktif"}
-            </option>
-            {mikrotikOptions.map((device) => (
-              <option key={device.id} value={device.id}>
-                {device.name} ({device.host}:{device.port})
-              </option>
-            ))}
-          </select>
+      <label>Pilih MikroTik</label>
+      <select
+        value={mikrotikDeviceId}
+        onChange={(event) => setMikrotikDeviceId(event.target.value)}
+      >
+        <option value="">-- Pilih MikroTik Gateway --</option>
+        {mikrotikOptions.map((device) => (
+          <option key={device.id} value={device.id}>
+            {device.name} ({device.host}:{device.port})
+          </option>
+        ))}
+      </select>
 
-          <label>Username PPPoE</label>
-          <input
-            value={pppoeUsername}
-            onChange={(event) => setPppoeUsername(event.target.value)}
-            placeholder="Contoh: 1/2/3:11_bdbalen"
-            required
-          />
-        </>
-      )}
+      <label>Pilih OLT</label>
+      <select
+        value={oltDeviceId}
+        onChange={(event) => setOltDeviceId(event.target.value)}
+      >
+        <option value="">-- Pilih OLT Gateway --</option>
+        {oltOptions.map((device) => (
+          <option key={device.id} value={device.id}>
+            {device.name} ({device.host}:{device.port})
+          </option>
+        ))}
+      </select>
 
-      {monitoringMethod === "OLT" && (
-        <>
-          <label>Pilih OLT</label>
-          <select
-            value={oltDeviceId}
-            onChange={(event) => setOltDeviceId(event.target.value)}
-            required={oltOptions.length > 0}
-          >
-            <option value="">
-              {oltOptions.length > 0 ? "-- Pilih OLT --" : "Belum ada OLT aktif"}
-            </option>
-            {oltOptions.map((device) => (
-              <option key={device.id} value={device.id}>
-                {device.name} ({device.host}:{device.port})
-              </option>
-            ))}
-          </select>
+      <label>Username PPPoE (Format Port PON)</label>
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <input
+          value={pppoeUsername}
+          onChange={(event) => setPppoeUsername(event.target.value)}
+          placeholder="Contoh: 1/2/3:11_bala_desa_balen"
+          style={{ flex: 1 }}
+        />
+        <button
+          type="button"
+          className="submit-node-button"
+          style={{ width: 'auto', padding: '0 14px', margin: 0, whiteSpace: 'nowrap' }}
+          onClick={handleSyncPppoeAndOlt}
+          disabled={syncing}
+        >
+          {syncing ? 'Sync...' : 'Sync OLT & PPPoE'}
+        </button>
+      </div>
 
-          <label>ONU Interface OLT</label>
-          <input
-            value={onuInterface}
-            onChange={(event) => setOnuInterface(event.target.value)}
-            placeholder="Contoh: gpon-onu_1/2/3:2"
-            required
-          />
-          <small className="form-helper-text">
-            Format ZTE C320: gpon-onu_1/2/3:2
-          </small>
-        </>
-      )}
+      <label style={{ marginTop: '10px' }}>ONU Interface</label>
+      <input
+        value={onuInterface}
+        onChange={(event) => setOnuInterface(event.target.value)}
+        placeholder="Contoh: gpon-onu_1/2/3:11"
+      />
 
       <label>Latitude</label>
       <input
@@ -443,14 +422,7 @@ export default function AddClientForm({
         )}
       </div>
 
-      {isPickingLocation && (
-        <p className="pick-info">
-          Klik lokasi baru di peta atau geser marker titik sementara.
-        </p>
-      )}
-
       {coordinateMessage && <p className="pick-info">{coordinateMessage}</p>}
-
       {message && <p className="form-message">{message}</p>}
 
       <button type="submit" disabled={loading}>
