@@ -179,7 +179,7 @@ export async function checkZteC320Onu(
       onuInterface,
       onuStatus: 'UNKNOWN',
       onuRxPower: null,
-      rawStatusText: 'Format interface tidak valid (Gunakan format gpon-onu_1/2/3:11)',
+      rawStatusText: 'Format interface tidak valid',
     }
   }
 
@@ -187,8 +187,11 @@ export async function checkZteC320Onu(
   const ifIndex = calculateZteIfIndex(parsed.shelf, parsed.slot, parsed.port)
 
   const targetStatusOid = `${OID_ZTE_ONU_STATUS_PREFIX}.${ifIndex}.${parsed.onuId}`
-  const targetRxPowerOidA = `${OID_ZTE_ONU_RX_POWER_PREFIX}.${ifIndex}.${parsed.onuId}.1`
-  const targetRxPowerOidB = `${OID_ZTE_ONU_RX_POWER_PREFIX}.${ifIndex}.${parsed.onuId}`
+  
+  // Format lengkap sub-index RX Power ZTE C320 (channel 1, tanpa channel, dan channel 2)
+  const rxOid1 = `${OID_ZTE_ONU_RX_POWER_PREFIX}.${ifIndex}.${parsed.onuId}.1`
+  const rxOid2 = `${OID_ZTE_ONU_RX_POWER_PREFIX}.${ifIndex}.${parsed.onuId}`
+  const rxOid3 = `1.3.6.1.4.1.3902.1012.3.50.12.1.1.14.${ifIndex}.${parsed.onuId}.1`
 
   return new Promise((resolve) => {
     let session: any
@@ -212,12 +215,12 @@ export async function checkZteC320Onu(
           onuInterface,
           onuStatus: 'UNKNOWN',
           onuRxPower: null,
-          rawStatusText: `SNMP Request Timeout ke OLT ${config.host}`,
+          rawStatusText: `Timeout SNMP ke OLT ${config.host}`,
         })
       }
     }, (config.timeoutMs || 4000) + 500)
 
-    session.get([targetStatusOid, targetRxPowerOidA, targetRxPowerOidB], (err: any, varbinds: any[]) => {
+    session.get([targetStatusOid, rxOid1, rxOid2, rxOid3], (err: any, varbinds: any[]) => {
       if (isResolved) return
       isResolved = true
       clearTimeout(timeout)
@@ -241,28 +244,31 @@ export async function checkZteC320Onu(
 
         if (vb.oid === targetStatusOid) {
           statusCode = Number(vb.value)
-          // Status OLT ZTE: 3: online/normal, 5: working, 6: los/offline, 4: offline
           if (statusCode === 3 || statusCode === 5) onuStatus = 'ONLINE'
           else if (statusCode === 6 || statusCode === 2) onuStatus = 'LOS'
           else if (statusCode === 4 || statusCode === 1) onuStatus = 'OFFLINE'
         }
 
-        if ((vb.oid === targetRxPowerOidA || vb.oid === targetRxPowerOidB) && rawRxValue === null) {
+        if (
+          (vb.oid === rxOid1 || vb.oid === rxOid2 || vb.oid === rxOid3) &&
+          rawRxValue === null
+        ) {
           const val = Number(vb.value)
-          if (!Number.isNaN(val) && val !== 0 && val !== 65535) {
+          if (!Number.isNaN(val) && val !== 0 && val !== 65535 && val !== 2147483647) {
             rawRxValue = val
           }
         }
       }
 
-      const rxPower = onuStatus === 'ONLINE' && rawRxValue !== null ? convertZteRxPower(rawRxValue) : null
+      // Hitung redaman jika rawRxValue ditemukan
+      const rxPower = rawRxValue !== null ? convertZteRxPower(rawRxValue) : null
 
       resolve({
         onuInterface,
         onuStatus,
         onuRxPower: rxPower,
-        rawStatusText: statusCode !== -1 ? `Status OLT: ${onuStatus} (Code: ${statusCode})` : 'ONU Not Found / No Response',
-        rawOutput: `ifIndex: ${ifIndex}.${parsed.onuId} -> StatusCode: ${statusCode}, RawRx: ${rawRxValue}`,
+        rawStatusText: statusCode !== -1 ? `Status OLT: ${onuStatus} (Code: ${statusCode})` : 'ONU Not Found',
+        rawOutput: `ifIndex: ${ifIndex}.${parsed.onuId} -> Code: ${statusCode}, RawRx: ${rawRxValue}`,
       })
     })
   })
