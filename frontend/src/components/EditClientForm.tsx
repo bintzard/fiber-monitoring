@@ -72,6 +72,10 @@ export default function EditClientForm({
     extraNode.mikrotikDeviceId || '',
   )
   const [oltDeviceId, setOltDeviceId] = useState(extraNode.oltDeviceId || '')
+  const [rxPower, setRxPower] = useState<number | null>(
+    node.rxPower ?? extraNode.onuRxPower ?? null,
+  )
+  const [ipAddress, setIpAddress] = useState<string | null>(node.ipAddress || null)
   const [networkDevices, setNetworkDevices] = useState<NetworkDeviceOption[]>([])
   const [deviceMessage, setDeviceMessage] = useState('')
   const [latitude, setLatitude] = useState(String(node.latitude))
@@ -177,8 +181,12 @@ export default function EditClientForm({
       const d = resData.data
       if (d.onuInterface) setOnuInterface(d.onuInterface)
       if (d.mikrotikDeviceId && !mikrotikDeviceId) setMikrotikDeviceId(d.mikrotikDeviceId)
+      if (d.ipAddress) setIpAddress(d.ipAddress)
+      if (d.rxPower !== null && d.rxPower !== undefined) {
+        setRxPower(d.rxPower)
+      }
 
-      const rxText = d.rxPower !== null ? `${d.rxPower} dBm` : '-'
+      const rxText = d.rxPower !== null && d.rxPower !== undefined ? `${d.rxPower} dBm` : '-'
       const ipText = d.ipAddress ? `IP: ${d.ipAddress}` : 'IP belum didapat'
       setMessage(`Sinkron Berhasil! Status: ${d.status} | ${ipText} | Redaman: ${rxText}`)
     } catch (error) {
@@ -208,6 +216,10 @@ export default function EditClientForm({
 
       const data = await response.json()
       if (!response.ok) throw new Error(data.message || 'Gagal cek ONU dari OLT.')
+
+      if (data.result?.onuRxPower !== undefined) {
+        setRxPower(data.result.onuRxPower)
+      }
 
       const resultText = `${data.result?.mappedNodeStatus || '-'} / ${data.result?.onuStatus || '-'} / RX ${data.result?.onuRxPower ?? '-'} dBm`
       setMessage(`Cek OLT berhasil: ${resultText}`)
@@ -246,8 +258,10 @@ export default function EditClientForm({
         body: JSON.stringify({
           name: cleanCustomerName,
           type: 'CLIENT',
+          ipAddress: ipAddress || node.ipAddress || null,
           latitude: finalLatitude,
           longitude: finalLongitude,
+          rxPower: rxPower !== null && rxPower !== undefined ? rxPower : (node.rxPower ?? null),
           parentId,
           pppoeUsername: cleanPppoeUsername || null,
           monitoringEnabled: monitoringMethod !== 'MANUAL',
