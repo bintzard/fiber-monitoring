@@ -17,6 +17,7 @@ const MIKROTIK_TIMEOUT_MS = Number(process.env.MIKROTIK_TIMEOUT_MS || 8000);
 
 const mikrotikClients = new Map<string, RouterOSAPI>();
 const mikrotikConnecting = new Map<string, Promise<RouterOSAPI>>();
+const offlineFailureCount = new Map<string, number>();
 let isPppoeCheckRunning = false;
 
 export interface PppActiveUser {
@@ -333,62 +334,122 @@ async function runPppoeCheck(io: Server) {
       orderBy: { id: "asc" },
     });
 
+    const RX_WARNING_LIMIT = Number(process.env.OLT_RX_WARNING_DBM || -27);
+
     for (const node of monitoredNodes) {
       if (!node.pppoeUsername) continue;
 
       const username = normalizeUsername(node.pppoeUsername);
       const activeEntry = allActiveUsersMap.get(username);
-      const isOnline = Boolean(activeEntry);
-      const nextStatus: NodeStatus = isOnline ? "ONLINE" : "OFFLINE";
+      const isPppoeActive = Boolean(activeEntry);
+
+      let targetStatus: NodeStatus = node.status;
+
+      if (isPppoeActive) {
+        offlineFailureCount.set(node.id, 0);
+        if (node.rxPower !== null && node.rxPower <= RX_WARNING_LIMIT) {
+          targetStatus = "WARNING";
+        } else {
+          targetStatus = "ONLINE";
+        }
+      } else {
+        const currentFail = (offlineFailureCount.get(node.id) || 0) + 1;
+        offlineFailureCount.set(node.id, currentFail);
+
+        if (currentFail >= 2) {
+          targetStatus = "OFFLINE";
+        }
+      }
+
       const nextIpAddress = activeEntry?.user.address || node.ipAddress;
       const autoOnuInterface =
         node.onuInterface || extractPonInterfaceFromUsername(node.pppoeUsername);
       const autoMikrotikId = activeEntry?.deviceId || node.mikrotikDeviceId;
 
-      const shouldUpdate =
-        node.status !== nextStatus ||
-        node.ipAddress !== nextIpAddress ||
-        node.onuInterface !== autoOnuInterface ||
-        (activeEntry && node.mikrotikDeviceId !== autoMikrotikId);
+      const statusChanged = node.status !== targetStatus;
+      const ipChanged = node.ipAddress !== nextIpAddress;
+      const interfaceChanged = node.onuInterface !== autoOnuInterface;
+      const deviceChanged = Boolean(activeEntry && node.mikrotikDeviceId !== autoMikrotikId);
 
-      if (shouldUpdate) {
+      if (statusChanged || ipChanged || interfaceChanged || deviceChanged) {
         const updatedNode = await prisma.node.update({
           where: { id: node.id },
           data: {
-            status: nextStatus,
+            status: targetStatus,
             ipAddress: nextIpAddress,
             onuInterface: autoOnuInterface,
             mikrotikDeviceId: autoMikrotikId,
             lastCheckedAt: new Date(),
-            lastSeenAt: nextStatus === "ONLINE" ? new Date() : node.lastSeenAt,
-            offlineSince: nextStatus === "OFFLINE" ? node.offlineSince || new Date() : null,
+            lastSeenAt:
+              targetStatus === "ONLINE" || targetStatus === "WARNING"
+                ? new Date()
+                : node.lastSeenAt,
+            offlineSince:
+              targetStatus === "OFFLINE" ? node.offlineSince || new Date() : null,
           },
         });
 
-        if (node.status !== updatedNode.status) {
+        if (statusChanged) {
+          let logTitle = "Status client berubah";
+          let logMsg = `${updatedNode.name} berubah menjadi ${targetStatus}.`;
+
+          if (targetStatus === "WARNING") {
+            logTitle = "⚠️ Redaman Optik Client Jelek";
+            logMsg = `${updatedNode.name} mengalami redaman tinggi (${node.rxPower ?? "-"} dBm).`;
+          }
+
           await createMonitoringLog(io, {
             nodeId: updatedNode.id,
-            eventType: getMonitoringLogEventType(updatedNode.status),
+            eventType: getMonitoringLogEventType(targetStatus),
             oldStatus: node.status,
-            newStatus: updatedNode.status,
-            title: getMonitoringLogTitle(updatedNode.status),
-            message: `${updatedNode.name} berubah menjadi ${updatedNode.status} lewat monitoring PPPoE.`,
+            newStatus: targetStatus,
+            title: logTitle,
+            message: logMsg,
           });
+
+          const affectedCables = await updateCableStatusByNode(node.id, targetStatus);
+          const recalculatedTopology = await recalculateOdpStatusByClient(node.id);
+
+          affectedCables.forEach((cable) => io.emit("cable-status-updated", cable));
+          recalculatedTopology.updatedNodes.forEach((n) => io.emit("node-status-updated", n));
+          recalculatedTopology.updatedCables.forEach((c) => io.emit("cable-status-updated", c));
         }
 
-        const affectedCables = await updateCableStatusByNode(node.id, nextStatus);
-        const recalculatedTopology = await recalculateOdpStatusByClient(node.id);
-
         io.emit("node-status-updated", updatedNode);
-
-        affectedCables.forEach((cable) => io.emit("cable-status-updated", cable));
-        recalculatedTopology.updatedNodes.forEach((n) => io.emit("node-status-updated", n));
-        recalculatedTopology.updatedCables.forEach((c) => io.emit("cable-status-updated", c));
+      } else {
+        const checkedNode = await updateLastCheckedAt(node.id, targetStatus);
+        if (checkedNode) {
+          io.emit("node-status-updated", checkedNode);
+        }
       }
     }
   } catch (error) {
     console.error("PPPOE MONITOR ERROR:", error);
   }
+}
+
+async function updateLastCheckedAt(
+  nodeId: string,
+  status: NodeStatus,
+): Promise<Node | null> {
+  const existingNode = await prisma.node.findUnique({
+    where: { id: nodeId },
+  });
+
+  if (!existingNode) return null;
+
+  const now = new Date();
+
+  return prisma.node.update({
+    where: { id: nodeId },
+    data: {
+      lastCheckedAt: now,
+      lastSeenAt:
+        status === "ONLINE" || status === "WARNING" ? now : existingNode.lastSeenAt,
+      offlineSince:
+        status === "OFFLINE" ? existingNode.offlineSince || now : null,
+    },
+  });
 }
 
 function getMonitoringLogEventType(status: NodeStatus): MonitoringLogEventType {
