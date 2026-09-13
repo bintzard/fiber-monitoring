@@ -57,7 +57,7 @@ export function parseZteOnuIndex(onuInterface: string): {
   onuId: number
 } | null {
   const clean = onuInterface.replace(/^(gpon[-_]onu[-_:]?)/i, '').trim()
-  const match = clean.match(/^(\d+)\/(\d+)\/(\d+):(\d+)$/)
+  const match = clean.match(/^(\d+)\/(\d+)\/(\d+)[:.](\d+)$/)
 
   if (!match) return null
 
@@ -71,29 +71,36 @@ export function parseZteOnuIndex(onuInterface: string): {
 }
 
 /**
- * Perhitungan ifIndex GPON ZTE C320 untuk Slot 2 (Port 1 - 16)
- * Port 1-8  : 268500992 + (port * 256)
- * Port 9-16 : 268566528 + ((port - 8) * 256) -> Port 13 = 268569856
+ * Menghasilkan seluruh kandidat ifIndex GPON ZTE C320 untuk Port 1 - 16
+ * Mengakomodasi variasi offset internal board GTGH/GTGO
  */
-function calculateZteIfIndex(shelf: number, slot: number, port: number): number {
+function calculateZteIfIndexCandidates(shelf: number, slot: number, port: number): number[] {
+  const candidates: number[] = []
+
   if (slot === 2) {
     if (port <= 8) {
-      return 268500992 + (port * 256)
+      candidates.push(268500992 + (port * 256))
     } else {
-      return 268566528 + ((port - 8) * 256)
+      candidates.push(268566528 + ((port - 8) * 256))
+      candidates.push(268566784 + ((port - 9) * 256))
+      candidates.push(268500992 + (port * 256))
     }
   }
 
   if (slot === 3) {
     if (port <= 8) {
-      return 268566528 + (port * 256)
+      candidates.push(268566528 + (port * 256))
     } else {
-      return 268632064 + ((port - 8) * 256)
+      candidates.push(268632064 + ((port - 8) * 256))
     }
   }
 
-  // Fallback standar bit-shifting ZTE
-  return 268435456 + (shelf * 65536) + (slot * 4096) + (port * 256)
+  // Fallback standar ZTE bit-shifting
+  const bitShiftIndex = (1 << 28) + (shelf << 24) + (slot << 19) + (port << 8)
+  candidates.push(bitShiftIndex)
+  candidates.push(268435456 + (slot * 4096) + (port * 256))
+
+  return Array.from(new Set(candidates))
 }
 
 function convertZteRxPower(rawVal: number): number | null {
@@ -190,19 +197,19 @@ export async function checkZteC320Onu(
       onuInterface,
       onuStatus: 'UNKNOWN',
       onuRxPower: null,
-      rawStatusText: 'Format interface tidak valid',
+      rawStatusText: 'Format interface tidak valid (Gunakan format 1/2/13:52 atau gpon-onu_1/2/13:52)',
     }
   }
 
   const config = configParam || getOltConfigFromEnv()
-  const ifIndex = calculateZteIfIndex(parsed.shelf, parsed.slot, parsed.port)
+  const candidateIndexes = calculateZteIfIndexCandidates(parsed.shelf, parsed.slot, parsed.port)
 
-  const targetStatusOid = `${OID_ZTE_ONU_STATUS_PREFIX}.${ifIndex}.${parsed.onuId}`
-  
-  // Format lengkap sub-index RX Power ZTE C320 (channel 1, tanpa channel, dan channel 2)
-  const rxOid1 = `${OID_ZTE_ONU_RX_POWER_PREFIX}.${ifIndex}.${parsed.onuId}.1`
-  const rxOid2 = `${OID_ZTE_ONU_RX_POWER_PREFIX}.${ifIndex}.${parsed.onuId}`
-  const rxOid3 = `1.3.6.1.4.1.3902.1012.3.50.12.1.1.14.${ifIndex}.${parsed.onuId}.1`
+  const oidsToQuery: string[] = []
+  for (const idx of candidateIndexes) {
+    oidsToQuery.push(`${OID_ZTE_ONU_STATUS_PREFIX}.${idx}.${parsed.onuId}`)
+    oidsToQuery.push(`${OID_ZTE_ONU_RX_POWER_PREFIX}.${idx}.${parsed.onuId}.1`)
+    oidsToQuery.push(`${OID_ZTE_ONU_RX_POWER_PREFIX}.${idx}.${parsed.onuId}`)
+  }
 
   return new Promise((resolve) => {
     let session: any
@@ -231,7 +238,7 @@ export async function checkZteC320Onu(
       }
     }, (config.timeoutMs || 4000) + 500)
 
-    session.get([targetStatusOid, rxOid1, rxOid2, rxOid3], (err: any, varbinds: any[]) => {
+    session.get(oidsToQuery, (err: any, varbinds: any[]) => {
       if (isResolved) return
       isResolved = true
       clearTimeout(timeout)
@@ -249,37 +256,48 @@ export async function checkZteC320Onu(
       let onuStatus: OnuCheckResult['onuStatus'] = 'UNKNOWN'
       let statusCode = -1
       let rawRxValue: number | null = null
+      let matchedIndex = candidateIndexes[0]
 
-      for (const vb of varbinds) {
-        if (snmp.isVarbindError(vb)) continue
+      for (const idx of candidateIndexes) {
+        const statusOid = `${OID_ZTE_ONU_STATUS_PREFIX}.${idx}.${parsed.onuId}`
+        const rxOid1 = `${OID_ZTE_ONU_RX_POWER_PREFIX}.${idx}.${parsed.onuId}.1`
+        const rxOid2 = `${OID_ZTE_ONU_RX_POWER_PREFIX}.${idx}.${parsed.onuId}`
 
-        if (vb.oid === targetStatusOid) {
-          statusCode = Number(vb.value)
-          if (statusCode === 3 || statusCode === 5) onuStatus = 'ONLINE'
-          else if (statusCode === 6 || statusCode === 2) onuStatus = 'LOS'
-          else if (statusCode === 4 || statusCode === 1) onuStatus = 'OFFLINE'
+        const statusVb = varbinds.find((vb) => vb.oid === statusOid && !snmp.isVarbindError(vb))
+        const rxVb = varbinds.find(
+          (vb) => (vb.oid === rxOid1 || vb.oid === rxOid2) && !snmp.isVarbindError(vb),
+        )
+
+        if (statusVb) {
+          const val = Number(statusVb.value)
+          if (val > 0) {
+            statusCode = val
+            matchedIndex = idx
+            if (val === 3 || val === 5) onuStatus = 'ONLINE'
+            else if (val === 6 || val === 2) onuStatus = 'LOS'
+            else if (val === 4 || val === 1) onuStatus = 'OFFLINE'
+          }
         }
 
-        if (
-          (vb.oid === rxOid1 || vb.oid === rxOid2 || vb.oid === rxOid3) &&
-          rawRxValue === null
-        ) {
-          const val = Number(vb.value)
+        if (rxVb && rawRxValue === null) {
+          const val = Number(rxVb.value)
           if (!Number.isNaN(val) && val !== 0 && val !== 65535 && val !== 2147483647) {
             rawRxValue = val
           }
         }
       }
 
-      // Hitung redaman jika rawRxValue ditemukan
       const rxPower = rawRxValue !== null ? convertZteRxPower(rawRxValue) : null
 
       resolve({
         onuInterface,
         onuStatus,
         onuRxPower: rxPower,
-        rawStatusText: statusCode !== -1 ? `Status OLT: ${onuStatus} (Code: ${statusCode})` : 'ONU Not Found',
-        rawOutput: `ifIndex: ${ifIndex}.${parsed.onuId} -> Code: ${statusCode}, RawRx: ${rawRxValue}`,
+        rawStatusText:
+          statusCode !== -1
+            ? `Status OLT: ${onuStatus} (Code: ${statusCode})`
+            : 'ONU Tidak Ditemukan di OLT',
+        rawOutput: `Index: ${matchedIndex}.${parsed.onuId} -> Status: ${statusCode}, RawRx: ${rawRxValue}`,
       })
     })
   })
